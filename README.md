@@ -1,5 +1,57 @@
 # v1 Traider - An AI powered OS for Textile Trades
 
+## Quick Start
+
+### Prerequisites
+- Python 3.11+
+- PostgreSQL database
+
+### Installation
+
+1. Clone the repository
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+3. Set up environment:
+```bash
+export DATABASE_URL=postgresql://user:pass@localhost:5432/inventory
+```
+
+4. Run the service:
+```bash
+./run.sh
+```
+
+The API will be available at `http://localhost:8000`
+
+Interactive API documentation: `http://localhost:8000/docs`
+
+### Example Flow
+
+```bash
+# Create a fabric
+curl -X POST http://localhost:8000/fabrics \
+  -H "Content-Type: application/json" \
+  -d '{"fabric_code": "FAB-001", "name": "Cotton Jersey"}'
+
+# Create a variant
+curl -X POST http://localhost:8000/variants \
+  -H "Content-Type: application/json" \
+  -d '{"fabric_id": 1, "color_code": "BLK-9001", "gsm": 180, "width": 72, "finish": "Bio"}'
+
+# Receive stock (3 rolls = 600 meters)
+curl -X POST http://localhost:8000/receive \
+  -H "Content-Type: application/json" \
+  -d '{"variant_id": 1, "qty": 3, "uom": "roll", "reason": "PO-2219"}'
+
+# Check stock
+curl "http://localhost:8000/stock?variant_id=1&uom=roll"
+```
+
+---
+
 # Problem statement (business-first)
 
 Teams need a **single, dead-simple source of truth** to answer:
