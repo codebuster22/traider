@@ -50,6 +50,40 @@ curl -X POST http://localhost:8000/receive \
 curl "http://localhost:8000/stock?variant_id=1&uom=roll"
 ```
 
+## MCP Server (AI Integration)
+
+This service includes an **MCP (Model Context Protocol) server** that allows AI assistants like Claude to interact with your inventory directly.
+
+### Setup for Claude Desktop
+
+1. Edit your Claude Desktop configuration:
+   - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+   - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+
+2. Add this configuration (update paths):
+```json
+{
+  "mcpServers": {
+    "fabric-inventory": {
+      "command": "python",
+      "args": ["/absolute/path/to/traider/mcp_server.py"],
+      "env": {
+        "DATABASE_URL": "postgresql://user:pass@localhost:5432/inventory"
+      }
+    }
+  }
+}
+```
+
+3. Restart Claude Desktop
+
+4. You can now ask Claude to manage your inventory:
+   - "Create a fabric with code FAB-001"
+   - "Show me all variants that are in stock"
+   - "Receive 5 rolls of variant 1 with reason 'PO-2219'"
+
+See [MCP_SERVER.md](MCP_SERVER.md) for complete MCP documentation.
+
 ---
 
 # Problem statement (business-first)

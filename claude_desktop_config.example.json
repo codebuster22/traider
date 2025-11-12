@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "fabric-inventory": {
+      "command": "python",
+      "args": ["/absolute/path/to/traider/mcp_server.py"],
+      "env": {
+        "DATABASE_URL": "postgresql://user:pass@localhost:5432/inventory"
+      }
+    }
+  }
+}
