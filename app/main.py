@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from app.db import init_db, close_db
-from app.routes import fabrics, variants, movements, stock
+from app.routes import fabrics, variants, movements, stock, mcp
 
 
 @asynccontextmanager
@@ -30,6 +30,7 @@ app.include_router(fabrics.router)
 app.include_router(variants.router)
 app.include_router(movements.router)
 app.include_router(stock.router)
+app.include_router(mcp.router)
 
 
 @app.get("/")

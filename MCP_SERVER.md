@@ -6,6 +6,10 @@ This is a Model Context Protocol (MCP) server that exposes the fabric inventory 
 
 Model Context Protocol (MCP) is an open protocol that enables AI assistants to securely connect to external tools and data sources. This MCP server allows Claude and other AI assistants to interact with your fabric inventory system.
 
+## Transport Method
+
+The MCP server is integrated into the FastAPI application and uses **Server-Sent Events (SSE)** over HTTP/HTTPS. This means you simply add a URL to your MCP client configuration instead of running a separate process.
+
 ## Available Tools
 
 The MCP server exposes the following tools:
@@ -90,6 +94,13 @@ pip install -r requirements.txt
 export DATABASE_URL=postgresql://user:pass@localhost:5432/inventory
 ```
 
+3. Start the FastAPI service:
+```bash
+./run.sh
+```
+
+The MCP server will be available at: `http://localhost:8000/mcp/sse`
+
 ## Configuration for MCP Clients
 
 ### Claude Desktop
@@ -103,41 +114,61 @@ Add this to your Claude Desktop configuration file:
 {
   "mcpServers": {
     "fabric-inventory": {
-      "command": "python",
-      "args": ["/absolute/path/to/traider/mcp_server.py"],
-      "env": {
-        "DATABASE_URL": "postgresql://user:pass@localhost:5432/inventory"
-      }
+      "url": "http://localhost:8000/mcp/sse"
     }
   }
 }
 ```
 
-**Important**: Replace `/absolute/path/to/traider` with the actual absolute path to this project directory.
+**For Production (HTTPS)**:
+```json
+{
+  "mcpServers": {
+    "fabric-inventory": {
+      "url": "https://your-domain.com/mcp/sse"
+    }
+  }
+}
+```
 
 ### Other MCP Clients
 
-For other MCP clients, configure them to run:
-```bash
-python /path/to/traider/mcp_server.py
+For other MCP clients, configure them to connect to:
+```
+http://localhost:8000/mcp/sse
 ```
 
-With the environment variable:
-```bash
-DATABASE_URL=postgresql://user:pass@localhost:5432/inventory
+Or in production:
+```
+https://your-domain.com/mcp/sse
 ```
 
 ## Testing the MCP Server
 
-You can test the server manually using the MCP Inspector:
+### Quick Test
+
+1. Start the FastAPI service:
+```bash
+./run.sh
+```
+
+2. Verify the MCP endpoint is accessible:
+```bash
+curl http://localhost:8000/mcp/sse
+```
+
+You should see an SSE connection established.
+
+### Using MCP Inspector
+
+For interactive testing with the MCP Inspector:
 
 ```bash
 # Install MCP Inspector
 npm install -g @modelcontextprotocol/inspector
 
-# Run with your server
-DATABASE_URL=postgresql://user:pass@localhost:5432/inventory \
-  mcp-inspector python mcp_server.py
+# Test the HTTP endpoint
+mcp-inspector http://localhost:8000/mcp/sse
 ```
 
 ## Usage Examples with Claude Desktop
@@ -167,21 +198,30 @@ Once configured, you can interact with Claude using natural language:
 │ (Claude Desktop)│
 └────────┬────────┘
          │ MCP Protocol
-         │ (stdio)
-┌────────▼────────┐
-│   MCP Server    │
-│  mcp_server.py  │
-└────────┬────────┘
+         │ (HTTP/SSE)
          │
-         │ Direct DB Access
-         │ (same as FastAPI app)
-┌────────▼────────┐
-│   PostgreSQL    │
-│   Database      │
-└─────────────────┘
+┌────────▼────────────────────────┐
+│      FastAPI Application        │
+│                                 │
+│  ┌──────────┐    ┌──────────┐  │
+│  │ REST API │    │ MCP /mcp │  │
+│  │ Routes   │    │ /sse     │  │
+│  └────┬─────┘    └────┬─────┘  │
+│       │               │         │
+│       └───────┬───────┘         │
+│           ┌───▼────┐            │
+│           │ repo.py│            │
+│           │  (DB)  │            │
+│           └───┬────┘            │
+└───────────────┼─────────────────┘
+                │
+         ┌──────▼──────┐
+         │ PostgreSQL  │
+         │  Database   │
+         └─────────────┘
 ```
 
-The MCP server uses the same repository layer (`app/repo.py`) as the FastAPI service, ensuring consistent business logic and data access patterns.
+The MCP endpoint is integrated into the FastAPI application and uses the same repository layer (`app/repo.py`) as the REST API, ensuring consistent business logic and data access patterns.
 
 ## Business Logic
 
@@ -194,53 +234,92 @@ The MCP server uses the same repository layer (`app/repo.py`) as the FastAPI ser
 
 ### Connection Issues
 
-If Claude Desktop can't connect to the server:
+If Claude Desktop can't connect to the MCP server:
 
-1. Check the logs (Claude Desktop → Settings → Developer → View Logs)
-2. Verify the absolute path in the config is correct
-3. Ensure DATABASE_URL is set correctly
-4. Test database connection: `psql $DATABASE_URL`
+1. **Verify the service is running**:
+   ```bash
+   curl http://localhost:8000/
+   # Should return: {"status":"ok","service":"fabric-inventory"}
+   ```
+
+2. **Check the MCP endpoint**:
+   ```bash
+   curl http://localhost:8000/mcp/sse
+   # Should establish an SSE connection
+   ```
+
+3. **Review logs** (Claude Desktop → Settings → Developer → View Logs)
+
+4. **Ensure DATABASE_URL is set**:
+   ```bash
+   echo $DATABASE_URL
+   ```
+
+5. **Test database connection**:
+   ```bash
+   psql $DATABASE_URL
+   ```
 
 ### Database Not Initialized
 
-The server automatically runs DDL at startup, but if you see table errors:
+The FastAPI service automatically runs DDL at startup. If you see table errors:
 
 ```bash
 # Initialize manually
 python -c "from app.db import init_db; init_db()"
 ```
 
-### Permission Issues
+### CORS Issues (Production)
 
-Ensure the Python interpreter has access to:
-- The project directory
-- The PostgreSQL database
-- Required Python packages
+If connecting from a different domain, you may need to enable CORS in `app/main.py`:
+
+```python
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://claude.ai"],  # Add your client origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
 
 ## Development
 
 To modify the MCP server:
 
-1. Edit `mcp_server.py`
-2. Restart Claude Desktop (or reconnect your MCP client)
-3. The changes will take effect immediately
+1. Edit `app/mcp.py` (tool definitions) or `app/routes/mcp.py` (HTTP endpoint)
+2. Restart the FastAPI service (`./run.sh`)
+3. Reconnect your MCP client (or restart Claude Desktop)
+4. Changes will take effect immediately
+
+### Adding New Tools
+
+1. Define input schema in `app/mcp.py`
+2. Add tool to `list_tools()` handler
+3. Implement tool logic in `call_tool()` handler
+4. Use existing `app/repo.py` functions for database operations
 
 ## Security Notes
 
-- This MCP server has **no authentication** - it's designed for local development
-- The server connects directly to your database
-- Only expose this to trusted MCP clients
-- For production, consider:
-  - Adding authentication to the database
-  - Running with restricted database user permissions
-  - Using the FastAPI service instead for API-based access with auth
+- This MCP server has **no authentication** by default
+- Suitable for local development and trusted environments
+- For production deployments:
+  - Use HTTPS (not HTTP)
+  - Add authentication middleware
+  - Implement rate limiting
+  - Use restricted database user permissions
+  - Enable CORS only for trusted origins
+  - Consider API keys or OAuth for MCP access
 
 ## Related Files
 
-- `mcp_server.py` - MCP server implementation
-- `app/repo.py` - Repository layer (shared with FastAPI)
-- `app/db.py` - Database connection (shared with FastAPI)
-- `app/models.py` - Pydantic models (shared with FastAPI)
+- `app/mcp.py` - MCP tool definitions and handlers
+- `app/routes/mcp.py` - SSE endpoint for HTTP/MCP transport
+- `app/repo.py` - Repository layer (shared with REST API)
+- `app/db.py` - Database connection (shared with REST API)
+- `app/models.py` - Pydantic models (shared with REST API)
 
 ## Learn More
 
