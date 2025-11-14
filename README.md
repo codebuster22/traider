@@ -1,5 +1,95 @@
 # v1 Traider - An AI powered OS for Textile Trades
 
+## Quick Start
+
+### Prerequisites
+- Python 3.11+
+- PostgreSQL database
+
+### Installation
+
+1. Clone the repository
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+3. Set up environment:
+```bash
+export DATABASE_URL=postgresql://user:pass@localhost:5432/inventory
+```
+
+4. Run the service:
+```bash
+./run.sh
+```
+
+The API will be available at `http://localhost:8000`
+
+Interactive API documentation: `http://localhost:8000/docs`
+
+### Example Flow
+
+```bash
+# Create a fabric
+curl -X POST http://localhost:8000/fabrics \
+  -H "Content-Type: application/json" \
+  -d '{"fabric_code": "FAB-001", "name": "Cotton Jersey"}'
+
+# Create a variant
+curl -X POST http://localhost:8000/variants \
+  -H "Content-Type: application/json" \
+  -d '{"fabric_id": 1, "color_code": "BLK-9001", "gsm": 180, "width": 72, "finish": "Bio"}'
+
+# Receive stock (3 rolls = 600 meters)
+curl -X POST http://localhost:8000/receive \
+  -H "Content-Type: application/json" \
+  -d '{"variant_id": 1, "qty": 3, "uom": "roll", "reason": "PO-2219"}'
+
+# Check stock
+curl "http://localhost:8000/stock?variant_id=1&uom=roll"
+```
+
+## MCP Server (AI Integration)
+
+This service includes an **MCP (Model Context Protocol) server** integrated into the FastAPI application. AI assistants like Claude can connect via HTTP/SSE and interact with your inventory using natural language.
+
+### Setup for Claude Desktop
+
+1. **Start the FastAPI service**:
+```bash
+./run.sh
+```
+
+2. **Edit your Claude Desktop configuration**:
+   - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+   - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+
+3. **Add this configuration**:
+```json
+{
+  "mcpServers": {
+    "fabric-inventory": {
+      "url": "http://localhost:8000/mcp/sse"
+    }
+  }
+}
+```
+
+4. **Restart Claude Desktop**
+
+5. **You can now ask Claude to manage your inventory**:
+   - "Create a fabric with code FAB-001 and name Cotton Jersey"
+   - "Show me all variants that are in stock"
+   - "Receive 5 rolls of variant 1 with reason 'PO-2219'"
+   - "What's the current stock for all variants?"
+
+The MCP server runs at: `http://localhost:8000/mcp/sse`
+
+See [MCP_SERVER.md](MCP_SERVER.md) for complete documentation, including production HTTPS setup.
+
+---
+
 # Problem statement (business-first)
 
 Teams need a **single, dead-simple source of truth** to answer:
