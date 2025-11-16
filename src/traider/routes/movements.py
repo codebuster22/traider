@@ -2,7 +2,7 @@
 from fastapi import APIRouter, HTTPException
 
 from traider.models import MovementCreate, MovementResponse
-from app import repo
+from traider import repo
 
 router = APIRouter(tags=["movements"])
 

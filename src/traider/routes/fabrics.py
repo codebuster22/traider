@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Query
 from psycopg import errors as pg_errors
 
 from traider.models import FabricCreate, Fabric, FabricSearchResult
-from app import repo
+from traider import repo
 
 router = APIRouter(prefix="/fabrics", tags=["fabrics"])
 

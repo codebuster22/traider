@@ -10,7 +10,7 @@ from mcp.server import Server
 from mcp.types import Tool, TextContent
 from pydantic import BaseModel, Field
 
-from app import repo
+from traider import repo
 
 
 # Initialize MCP server instance
