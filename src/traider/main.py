@@ -1,8 +1,8 @@
 """FastAPI application for Fabric Inventory Service."""
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from starlette.routing import Mount
+from starlette.routing import Route
 
 from traider.db import init_db, close_db
 from traider.routes import fabrics, variants, movements, stock
@@ -34,9 +34,13 @@ app.include_router(movements.router)
 app.include_router(stock.router)
 app.include_router(mcp_router)
 
-# Mount the MCP messages endpoint as an ASGI app
-# handle_post_message is an ASGI app (expects scope, receive, send), not a route handler
-app.mount("/mcp/messages", sse_transport.handle_post_message)
+
+# Add the MCP messages endpoint as a raw ASGI route
+# handle_post_message is an ASGI app that sends its own response,
+# so we add it directly to avoid FastAPI trying to send another response
+app.router.routes.append(
+    Route("/mcp/messages", endpoint=sse_transport.handle_post_message, methods=["POST"])
+)
 
 
 @app.get("/")
