@@ -1,7 +1,7 @@
 """MCP SSE endpoint for HTTP-based MCP connections."""
 from mcp.server.sse import SseServerTransport
 from starlette.applications import Starlette
-from starlette.routing import Route, Mount
+from starlette.routing import Route, Mount, Router
 
 from traider.mcp import mcp_server
 
@@ -39,11 +39,13 @@ async def handle_sse(request):
 
 
 # Create Starlette app for MCP routes (to be mounted in FastAPI at /mcp)
-# redirect_slashes=False prevents 307 redirects for trailing slash mismatches
-mcp_app = Starlette(
+# Use Router with redirect_slashes=False to prevent 307 redirects
+mcp_router = Router(
     routes=[
         Route("/sse", endpoint=handle_sse),
         Route("/messages", endpoint=sse_transport.handle_post_message, methods=["POST"]),
     ],
     redirect_slashes=False
 )
+
+mcp_app = Starlette(routes=mcp_router.routes)
