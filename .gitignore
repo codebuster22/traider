@@ -28,7 +28,6 @@ wheels/
 
 # UV / Python project
 .venv/
-uv.lock
 
 # IDE
 .vscode/
