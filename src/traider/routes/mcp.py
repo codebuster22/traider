@@ -1,6 +1,5 @@
 """MCP SSE endpoint for HTTP-based MCP connections."""
 from fastapi import APIRouter, Request
-from fastapi.responses import Response
 from mcp.server.sse import SseServerTransport
 
 from traider.mcp import mcp_server
@@ -42,11 +41,6 @@ async def handle_sse(request: Request):
         )
 
 
-@router.post("/messages")
-async def handle_post_message(request: Request):
-    """Handle POST messages from MCP client."""
-    await sse_transport.handle_post_message(
-        request.scope,
-        request.receive,
-        request._send
-    )
+# Note: The /mcp/messages POST endpoint is added in main.py as a raw Starlette route
+# because sse_transport.handle_post_message is an ASGI app that sends its own response.
+# FastAPI routes would try to send an additional response, causing conflicts.

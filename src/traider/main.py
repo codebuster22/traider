@@ -2,9 +2,11 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from starlette.routing import Route
 
 from traider.db import init_db, close_db
-from traider.routes import fabrics, variants, movements, stock, mcp
+from traider.routes import fabrics, variants, movements, stock
+from traider.routes.mcp import router as mcp_router, sse_transport
 
 
 @asynccontextmanager
@@ -30,7 +32,13 @@ app.include_router(fabrics.router)
 app.include_router(variants.router)
 app.include_router(movements.router)
 app.include_router(stock.router)
-app.include_router(mcp.router)
+app.include_router(mcp_router)
+
+# Add the MCP messages endpoint as a raw Starlette route
+# This is necessary because handle_post_message is an ASGI app that sends its own response
+app.router.routes.append(
+    Route("/mcp/messages", endpoint=sse_transport.handle_post_message, methods=["POST"])
+)
 
 
 @app.get("/")
