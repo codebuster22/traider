@@ -1,1 +1,0 @@
-"""Fabric Inventory Service."""

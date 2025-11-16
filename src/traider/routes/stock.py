@@ -2,7 +2,7 @@
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 
-from app.models import StockBalance
+from traider.models import StockBalance
 from app import repo
 
 router = APIRouter(prefix="/stock", tags=["stock"])

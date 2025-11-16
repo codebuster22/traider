@@ -5,7 +5,7 @@ from typing import AsyncGenerator
 from fastapi import APIRouter, Request
 from sse_starlette import EventSourceResponse
 
-from app.mcp import mcp_server
+from traider.mcp import mcp_server
 
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])

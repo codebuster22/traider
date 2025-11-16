@@ -3,8 +3,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
-from app.db import init_db, close_db
-from app.routes import fabrics, variants, movements, stock, mcp
+from traider.db import init_db, close_db
+from traider.routes import fabrics, variants, movements, stock, mcp
 
 
 @asynccontextmanager

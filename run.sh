@@ -1,10 +1,11 @@
 #!/bin/bash
-# Simple run script for the Fabric Inventory Service
+# Run script for the Fabric Inventory Service using UV
 # Usage: ./run.sh
 
 # Default values
-HOST="${HOST:-0.0.0.0}"
-PORT="${PORT:-8000}"
+export HOST="${HOST:-0.0.0.0}"
+export PORT="${PORT:-8000}"
+export RELOAD="${RELOAD:-true}"
 
 # Check if DATABASE_URL is set
 if [ -z "$DATABASE_URL" ]; then
@@ -13,5 +14,5 @@ if [ -z "$DATABASE_URL" ]; then
     exit 1
 fi
 
-# Run the FastAPI application
-uvicorn app.main:app --host "$HOST" --port "$PORT" --reload
+# Run the FastAPI application using UV
+uv run traider-server

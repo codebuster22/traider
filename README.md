@@ -4,29 +4,47 @@
 
 ### Prerequisites
 - Python 3.11+
+- [UV](https://docs.astral.sh/uv/) (Python package manager)
 - PostgreSQL database
 
 ### Installation
 
-1. Clone the repository
-2. Install dependencies:
+1. **Clone the repository**
+
+2. **Install UV** (if not already installed):
 ```bash
-pip install -r requirements.txt
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-3. Set up environment:
+3. **Install dependencies with UV**:
+```bash
+uv sync
+```
+
+4. **Set up environment**:
 ```bash
 export DATABASE_URL=postgresql://user:pass@localhost:5432/inventory
 ```
 
-4. Run the service:
+5. **Run the service**:
 ```bash
 ./run.sh
+# Or directly with UV:
+uv run traider-server
 ```
 
 The API will be available at `http://localhost:8000`
 
 Interactive API documentation: `http://localhost:8000/docs`
+
+MCP endpoint for AI integration: `http://localhost:8000/mcp/sse`
+
+### Alternative: Direct Python Run
+
+If you prefer not to use UV entry points:
+```bash
+uv run python -m uvicorn traider.main:app --host 0.0.0.0 --port 8000 --reload
+```
 
 ### Example Flow
 
@@ -160,19 +178,26 @@ No authentication. Keep everything minimal and predictable.
 
 * `DATABASE_URL=postgresql://user:pass@host:5432/inventory`
 
-## Project layout (suggested)
+## Project layout
 
 ```
-app/
-  main.py            # FastAPI app, startup init_db()
-  db.py              # connect(), init_db(), helpers
-  models.py          # Pydantic schemas
-  repo.py            # SQL helpers (lookup, insert, upsert)
-  routes/
-    fabrics.py
-    variants.py
-    movements.py
-    stock.py
+pyproject.toml       # UV/Python project configuration
+.python-version      # Python version for UV
+src/
+  traider/
+    __init__.py      # Package definition
+    cli.py           # Entry points (traider-server command)
+    main.py          # FastAPI app, startup init_db()
+    db.py            # connect(), init_db(), helpers
+    models.py        # Pydantic schemas
+    repo.py          # SQL helpers (lookup, insert, upsert)
+    mcp.py           # MCP tool definitions
+    routes/
+      fabrics.py     # Fabric CRUD endpoints
+      variants.py    # Variant CRUD endpoints
+      movements.py   # Stock movement endpoints
+      stock.py       # Stock query endpoints
+      mcp.py         # MCP SSE endpoint
 ```
 
 ---

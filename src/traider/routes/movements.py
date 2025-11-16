@@ -1,7 +1,7 @@
 """Routes for stock movements."""
 from fastapi import APIRouter, HTTPException
 
-from app.models import MovementCreate, MovementResponse
+from traider.models import MovementCreate, MovementResponse
 from app import repo
 
 router = APIRouter(tags=["movements"])

@@ -4,12 +4,13 @@ from contextlib import contextmanager
 from typing import Generator
 import psycopg
 from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 
 # Get database URL from environment
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://localhost:5432/inventory")
 
 # Global connection pool
-_pool = None
+_pool: ConnectionPool | None = None
 
 
 DDL = """
@@ -79,7 +80,7 @@ def init_db() -> None:
     global _pool
 
     # Create connection pool
-    _pool = psycopg.ConnectionPool(
+    _pool = ConnectionPool(
         DATABASE_URL,
         min_size=1,
         max_size=10,

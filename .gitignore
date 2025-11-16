@@ -26,6 +26,10 @@ wheels/
 # Environment variables
 .env
 
+# UV / Python project
+.venv/
+uv.lock
+
 # IDE
 .vscode/
 .idea/

@@ -289,17 +289,17 @@ app.add_middleware(
 
 To modify the MCP server:
 
-1. Edit `app/mcp.py` (tool definitions) or `app/routes/mcp.py` (HTTP endpoint)
-2. Restart the FastAPI service (`./run.sh`)
+1. Edit `src/traider/mcp.py` (tool definitions) or `src/traider/routes/mcp.py` (HTTP endpoint)
+2. Restart the FastAPI service (`./run.sh` or `uv run traider-server`)
 3. Reconnect your MCP client (or restart Claude Desktop)
 4. Changes will take effect immediately
 
 ### Adding New Tools
 
-1. Define input schema in `app/mcp.py`
+1. Define input schema in `src/traider/mcp.py`
 2. Add tool to `list_tools()` handler
 3. Implement tool logic in `call_tool()` handler
-4. Use existing `app/repo.py` functions for database operations
+4. Use existing `src/traider/repo.py` functions for database operations
 
 ## Security Notes
 
@@ -315,11 +315,12 @@ To modify the MCP server:
 
 ## Related Files
 
-- `app/mcp.py` - MCP tool definitions and handlers
-- `app/routes/mcp.py` - SSE endpoint for HTTP/MCP transport
-- `app/repo.py` - Repository layer (shared with REST API)
-- `app/db.py` - Database connection (shared with REST API)
-- `app/models.py` - Pydantic models (shared with REST API)
+- `src/traider/mcp.py` - MCP tool definitions and handlers
+- `src/traider/routes/mcp.py` - SSE endpoint for HTTP/MCP transport
+- `src/traider/repo.py` - Repository layer (shared with REST API)
+- `src/traider/db.py` - Database connection (shared with REST API)
+- `src/traider/models.py` - Pydantic models (shared with REST API)
+- `pyproject.toml` - Project configuration and dependencies
 
 ## Learn More
 

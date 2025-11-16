@@ -1,7 +1,7 @@
 """Repository layer for database operations."""
 from typing import Optional
 from decimal import Decimal
-from app.db import get_conn
+from traider.db import get_conn
 
 # Constant for UOM conversion
 ROLL_TO_M = 200

@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from psycopg import errors as pg_errors
 
-from app.models import FabricCreate, Fabric, FabricSearchResult
+from traider.models import FabricCreate, Fabric, FabricSearchResult
 from app import repo
 
 router = APIRouter(prefix="/fabrics", tags=["fabrics"])

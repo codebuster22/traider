@@ -1,0 +1,33 @@
+[project]
+name = "traider"
+version = "1.0.0"
+description = "Fabric Inventory Service - A dead-simple stock tracking service for textile trades"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "psycopg[binary]>=3.1.0",
+    "psycopg-pool>=3.1.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "mcp>=1.0.0",
+    "sse-starlette>=2.0.0",
+]
+
+[project.scripts]
+traider = "traider.cli:main"
+traider-server = "traider.cli:serve"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/traider"]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.0.0",
+    "httpx>=0.25.0",
+]
