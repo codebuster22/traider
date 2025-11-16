@@ -4,8 +4,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from traider.db import init_db, close_db
-from traider.routes import fabrics, variants, movements, stock
-from traider.routes.mcp import mcp_app
+from traider.routes import fabrics, variants, movements, stock, mcp
 
 
 @asynccontextmanager
@@ -31,9 +30,7 @@ app.include_router(fabrics.router)
 app.include_router(variants.router)
 app.include_router(movements.router)
 app.include_router(stock.router)
-
-# Mount MCP server as a sub-application at /mcp
-app.mount("/mcp", mcp_app)
+app.include_router(mcp.router)
 
 
 @app.get("/")

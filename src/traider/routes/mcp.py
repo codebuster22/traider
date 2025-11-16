@@ -1,16 +1,20 @@
 """MCP SSE endpoint for HTTP-based MCP connections."""
+from fastapi import APIRouter, Request
+from fastapi.responses import Response
 from mcp.server.sse import SseServerTransport
-from starlette.applications import Starlette
-from starlette.routing import Route, Mount, Router
 
 from traider.mcp import mcp_server
 
 
-# Create SSE transport with the message endpoint path (full path from root)
+router = APIRouter(prefix="/mcp", tags=["mcp"])
+
+# Create SSE transport with the message endpoint path
+# This path is sent to clients, so it must be the full path they should POST to
 sse_transport = SseServerTransport("/mcp/messages")
 
 
-async def handle_sse(request):
+@router.get("/sse")
+async def handle_sse(request: Request):
     """
     SSE endpoint for MCP connections.
 
@@ -38,14 +42,11 @@ async def handle_sse(request):
         )
 
 
-# Create Starlette app for MCP routes (to be mounted in FastAPI at /mcp)
-# Use Router with redirect_slashes=False to prevent 307 redirects
-mcp_router = Router(
-    routes=[
-        Route("/sse", endpoint=handle_sse),
-        Route("/messages", endpoint=sse_transport.handle_post_message, methods=["POST"]),
-    ],
-    redirect_slashes=False
-)
-
-mcp_app = Starlette(routes=mcp_router.routes)
+@router.post("/messages")
+async def handle_post_message(request: Request):
+    """Handle POST messages from MCP client."""
+    await sse_transport.handle_post_message(
+        request.scope,
+        request.receive,
+        request._send
+    )
