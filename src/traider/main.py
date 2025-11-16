@@ -37,9 +37,13 @@ app.include_router(mcp_router)
 
 # Add the MCP messages endpoint as a raw ASGI route
 # handle_post_message is an ASGI app that sends its own response,
-# so we add it directly to avoid FastAPI trying to send another response
+# so we wrap it to extract ASGI primitives from the Request object
+async def mcp_messages_handler(request: Request):
+    """Wrapper to call handle_post_message as ASGI app."""
+    await sse_transport.handle_post_message(request.scope, request.receive, request._send)
+
 app.router.routes.append(
-    Route("/mcp/messages", endpoint=sse_transport.handle_post_message, methods=["POST"])
+    Route("/mcp/messages", endpoint=mcp_messages_handler, methods=["POST"])
 )
 
 
