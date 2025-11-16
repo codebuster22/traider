@@ -7,7 +7,7 @@ from traider.mcp import mcp_server
 
 
 # Create SSE transport with the message endpoint path (full path from root)
-sse_transport = SseServerTransport("/mcp/messages/")
+sse_transport = SseServerTransport("/mcp/messages")
 
 
 async def handle_sse(request):
@@ -21,7 +21,7 @@ async def handle_sse(request):
     {
       "mcpServers": {
         "fabric-inventory": {
-          "url": "https://your-domain.com/mcp/sse/"
+          "url": "https://your-domain.com/mcp/sse"
         }
       }
     }
@@ -39,9 +39,11 @@ async def handle_sse(request):
 
 
 # Create Starlette app for MCP routes (to be mounted in FastAPI at /mcp)
+# redirect_slashes=False prevents 307 redirects for trailing slash mismatches
 mcp_app = Starlette(
     routes=[
-        Route("/sse/", endpoint=handle_sse),
-        Mount("/messages/", app=sse_transport.handle_post_message),
-    ]
+        Route("/sse", endpoint=handle_sse),
+        Route("/messages", endpoint=sse_transport.handle_post_message, methods=["POST"]),
+    ],
+    redirect_slashes=False
 )
