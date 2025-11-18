@@ -25,6 +25,7 @@ class CreateFabricInput(BaseModel):
     fabric_code: str = Field(description="Unique fabric code (e.g., 'FAB-001')")
     name: str = Field(description="Fabric name (e.g., 'Cotton Jersey')")
     image_url: Optional[str] = Field(None, description="Optional image URL")
+    gallery: dict = Field(default_factory=dict, description="Gallery with photoshoot namespaces, each having 'main' and 'images' array")
 
 
 class SearchFabricsInput(BaseModel):
@@ -42,6 +43,7 @@ class CreateVariantInput(BaseModel):
     width: int = Field(description="Width in inches")
     finish: str = Field(description="Finish type (e.g., 'Bio', 'Enzyme')")
     image_url: Optional[str] = Field(None, description="Optional image URL")
+    gallery: dict = Field(default_factory=dict, description="Gallery with photoshoot namespaces, each having 'main' and 'images' array")
 
 
 class GetVariantInput(BaseModel):
@@ -166,7 +168,8 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             result = repo.create_fabric(
                 fabric_code=args.fabric_code,
                 name=args.name,
-                image_url=args.image_url
+                image_url=args.image_url,
+                gallery=args.gallery
             )
             return [TextContent(
                 type="text",
@@ -201,7 +204,8 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 gsm=args.gsm,
                 width=args.width,
                 finish=args.finish,
-                image_url=args.image_url
+                image_url=args.image_url,
+                gallery=args.gallery
             )
             if result is None:
                 return [TextContent(

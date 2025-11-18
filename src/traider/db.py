@@ -72,6 +72,13 @@ CREATE INDEX IF NOT EXISTS idx_variants_width
   ON fabric_variants (width);
 CREATE INDEX IF NOT EXISTS idx_movements_variant_ts
   ON stock_movements (variant_id, ts DESC);
+
+-- Migration: Add gallery column for structured image galleries
+ALTER TABLE fabrics
+  ADD COLUMN IF NOT EXISTS gallery JSONB DEFAULT '{}'::jsonb;
+
+ALTER TABLE fabric_variants
+  ADD COLUMN IF NOT EXISTS gallery JSONB DEFAULT '{}'::jsonb;
 """
 
 

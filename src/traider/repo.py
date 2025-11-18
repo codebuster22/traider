@@ -1,6 +1,7 @@
 """Repository layer for database operations."""
 from typing import Optional
 from decimal import Decimal
+import json
 from traider.db import get_conn
 
 # Constant for UOM conversion
@@ -11,17 +12,25 @@ ROLL_TO_M = 200
 # Fabrics
 # ============================================================================
 
-def create_fabric(fabric_code: str, name: str, image_url: Optional[str] = None) -> dict:
+def create_fabric(fabric_code: str, name: str, image_url: Optional[str] = None, gallery: Optional[dict] = None) -> dict:
     """Create a new fabric."""
+    if gallery is None:
+        gallery = {}
+
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO fabrics (fabric_code, name, image_url)
-                VALUES (%(fabric_code)s, %(name)s, %(image_url)s)
-                RETURNING id, fabric_code, name, image_url
+                INSERT INTO fabrics (fabric_code, name, image_url, gallery)
+                VALUES (%(fabric_code)s, %(name)s, %(image_url)s, %(gallery)s)
+                RETURNING id, fabric_code, name, image_url, gallery
                 """,
-                {"fabric_code": fabric_code, "name": name, "image_url": image_url}
+                {
+                    "fabric_code": fabric_code,
+                    "name": name,
+                    "image_url": image_url,
+                    "gallery": json.dumps(gallery)
+                }
             )
             result = cur.fetchone()
         conn.commit()
@@ -74,7 +83,7 @@ def search_fabrics(
             # Get items
             cur.execute(
                 f"""
-                SELECT id, fabric_code, name, image_url
+                SELECT id, fabric_code, name, image_url, gallery
                 FROM fabrics
                 {where_sql}
                 ORDER BY {sort_by} {sort_dir}
@@ -97,9 +106,13 @@ def create_variant(
     gsm: int,
     width: int,
     finish: str,
-    image_url: Optional[str] = None
+    image_url: Optional[str] = None,
+    gallery: Optional[dict] = None
 ) -> Optional[dict]:
     """Create a new variant. Returns None if fabric_id doesn't exist."""
+    if gallery is None:
+        gallery = {}
+
     with get_conn() as conn:
         with conn.cursor() as cur:
             # Check fabric exists
@@ -109,9 +122,9 @@ def create_variant(
 
             cur.execute(
                 """
-                INSERT INTO fabric_variants (fabric_id, color_code, gsm, width, finish, image_url)
-                VALUES (%(fabric_id)s, %(color_code)s, %(gsm)s, %(width)s, %(finish)s, %(image_url)s)
-                RETURNING id, fabric_id, color_code, gsm, width, finish, image_url
+                INSERT INTO fabric_variants (fabric_id, color_code, gsm, width, finish, image_url, gallery)
+                VALUES (%(fabric_id)s, %(color_code)s, %(gsm)s, %(width)s, %(finish)s, %(image_url)s, %(gallery)s)
+                RETURNING id, fabric_id, color_code, gsm, width, finish, image_url, gallery
                 """,
                 {
                     "fabric_id": fabric_id,
@@ -119,7 +132,8 @@ def create_variant(
                     "gsm": gsm,
                     "width": width,
                     "finish": finish,
-                    "image_url": image_url
+                    "image_url": image_url,
+                    "gallery": json.dumps(gallery)
                 }
             )
             result = cur.fetchone()
@@ -139,11 +153,13 @@ def get_variant_detail(variant_id: int) -> Optional[dict]:
                     f.fabric_code,
                     f.name as fabric_name,
                     f.image_url as fabric_image_url,
+                    f.gallery as fabric_gallery,
                     v.color_code,
                     v.gsm,
                     v.width,
                     v.finish,
-                    v.image_url as variant_image_url
+                    v.image_url as variant_image_url,
+                    v.gallery as variant_gallery
                 FROM fabric_variants v
                 JOIN fabrics f ON v.fabric_id = f.id
                 WHERE v.id = %s
@@ -282,11 +298,13 @@ def search_variants(
                     f.fabric_code,
                     f.name as fabric_name,
                     f.image_url as fabric_image_url,
+                    f.gallery as fabric_gallery,
                     v.color_code,
                     v.gsm,
                     v.width,
                     v.finish,
-                    v.image_url as variant_image_url
+                    v.image_url as variant_image_url,
+                    v.gallery as variant_gallery
                     {stock_fields}
                 FROM fabric_variants v
                 JOIN fabrics f ON v.fabric_id = f.id
@@ -397,11 +415,13 @@ def get_stock_balance(variant_id: int, uom: str = "m") -> Optional[dict]:
                     f.fabric_code,
                     f.name as fabric_name,
                     f.image_url as fabric_image_url,
+                    f.gallery as fabric_gallery,
                     v.color_code,
                     v.gsm,
                     v.width,
                     v.finish,
                     v.image_url as variant_image_url,
+                    v.gallery as variant_gallery,
                     COALESCE(sb.on_hand_m, 0) as on_hand_m,
                     COALESCE(sb.updated_at, now()) as updated_at
                 FROM fabric_variants v
@@ -446,11 +466,13 @@ def get_stock_balances_batch(variant_ids: list[int], uom: str = "m") -> list[dic
                     f.fabric_code,
                     f.name as fabric_name,
                     f.image_url as fabric_image_url,
+                    f.gallery as fabric_gallery,
                     v.color_code,
                     v.gsm,
                     v.width,
                     v.finish,
                     v.image_url as variant_image_url,
+                    v.gallery as variant_gallery,
                     COALESCE(sb.on_hand_m, 0) as on_hand_m,
                     COALESCE(sb.updated_at, now()) as updated_at
                 FROM fabric_variants v

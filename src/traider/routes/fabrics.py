@@ -16,7 +16,8 @@ def create_fabric(fabric: FabricCreate):
         result = repo.create_fabric(
             fabric_code=fabric.fabric_code,
             name=fabric.name,
-            image_url=fabric.image_url
+            image_url=fabric.image_url,
+            gallery=fabric.gallery
         )
         return result
     except pg_errors.UniqueViolation:

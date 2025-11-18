@@ -19,7 +19,8 @@ def create_variant(variant: VariantCreate):
             gsm=variant.gsm,
             width=variant.width,
             finish=variant.finish,
-            image_url=variant.image_url
+            image_url=variant.image_url,
+            gallery=variant.gallery
         )
         if result is None:
             raise HTTPException(status_code=404, detail=f"Fabric with id {variant.fabric_id} not found")

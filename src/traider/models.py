@@ -5,6 +5,20 @@ from pydantic import BaseModel, Field, field_validator
 
 
 # ============================================================================
+# Gallery
+# ============================================================================
+
+class GalleryPhotoshoot(BaseModel):
+    """A photoshoot namespace with main image and gallery."""
+    main: str
+    images: list[str] = Field(default_factory=list)
+
+
+# Gallery is a dict mapping namespace (e.g., "photoshoot1") to GalleryPhotoshoot
+Gallery = dict[str, GalleryPhotoshoot]
+
+
+# ============================================================================
 # Fabrics
 # ============================================================================
 
@@ -12,6 +26,7 @@ class FabricCreate(BaseModel):
     fabric_code: str
     name: str
     image_url: Optional[str] = None
+    gallery: Gallery = Field(default_factory=dict)
 
 
 class Fabric(BaseModel):
@@ -19,6 +34,7 @@ class Fabric(BaseModel):
     fabric_code: str
     name: str
     image_url: Optional[str] = None
+    gallery: Gallery = Field(default_factory=dict)
 
 
 # ============================================================================
@@ -32,6 +48,7 @@ class VariantCreate(BaseModel):
     width: int
     finish: str
     image_url: Optional[str] = None
+    gallery: Gallery = Field(default_factory=dict)
 
 
 class Variant(BaseModel):
@@ -42,6 +59,7 @@ class Variant(BaseModel):
     width: int
     finish: str
     image_url: Optional[str] = None
+    gallery: Gallery = Field(default_factory=dict)
 
 
 class VariantDetail(BaseModel):
@@ -51,11 +69,13 @@ class VariantDetail(BaseModel):
     fabric_code: str
     fabric_name: str
     fabric_image_url: Optional[str] = None
+    fabric_gallery: Gallery = Field(default_factory=dict)
     color_code: str
     gsm: int
     width: int
     finish: str
     variant_image_url: Optional[str] = None
+    variant_gallery: Gallery = Field(default_factory=dict)
 
 
 # ============================================================================
@@ -94,11 +114,13 @@ class StockBalance(BaseModel):
     fabric_code: str
     fabric_name: str
     fabric_image_url: Optional[str] = None
+    fabric_gallery: Gallery = Field(default_factory=dict)
     color_code: str
     gsm: int
     width: int
     finish: str
     variant_image_url: Optional[str] = None
+    variant_gallery: Gallery = Field(default_factory=dict)
 
     on_hand_m: float
     on_hand_rolls: float
@@ -127,11 +149,13 @@ class VariantSearchItem(BaseModel):
     fabric_code: str
     fabric_name: str
     fabric_image_url: Optional[str] = None
+    fabric_gallery: Gallery = Field(default_factory=dict)
     color_code: str
     gsm: int
     width: int
     finish: str
     variant_image_url: Optional[str] = None
+    variant_gallery: Gallery = Field(default_factory=dict)
 
     # Optional stock fields
     on_hand_m: Optional[float] = None
