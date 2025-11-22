@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from psycopg import errors as pg_errors
 
-from traider.models import VariantCreate, Variant, VariantDetail, VariantSearchResult
+from traider.models import VariantCreate, VariantUpdate, Variant, VariantDetail, VariantSearchResult
 from traider import repo
 from traider.cloudinary_utils import upload_image as cloudinary_upload
 
@@ -45,6 +45,36 @@ def create_variant(variant: VariantCreate):
             detail=f"Variant with fabric_id={variant.fabric_id}, color_code={variant.color_code}, "
                    f"gsm={variant.gsm}, width={variant.width}, finish={variant.finish} already exists"
         )
+
+
+@router.put("/{variant_id}", response_model=Variant)
+def update_variant(variant_id: int, variant: VariantUpdate):
+    """Update an existing variant."""
+    # Handle inline image upload
+    image_url = variant.image_url
+    if variant.image_data:
+        try:
+            upload_result = cloudinary_upload(
+                image_data=variant.image_data,
+                folder="traider/variants",
+                filename=f"variant_{variant_id}"
+            )
+            image_url = upload_result['secure_url']
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Image upload failed: {str(e)}")
+
+    result = repo.update_variant(
+        variant_id=variant_id,
+        color_code=variant.color_code,
+        gsm=variant.gsm,
+        width=variant.width,
+        finish=variant.finish,
+        image_url=image_url,
+        gallery=variant.gallery
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Variant with id {variant_id} not found")
+    return result
 
 
 @router.get("/{variant_id}", response_model=VariantDetail)

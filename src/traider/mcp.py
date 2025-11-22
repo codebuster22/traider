@@ -36,6 +36,14 @@ class CreateFabricInput(BaseModel):
     gallery: dict = Field(default_factory=dict, description="Gallery with photoshoot namespaces, each having 'main' and 'images' array")
 
 
+class UpdateFabricInput(BaseModel):
+    fabric_id: int = Field(description="ID of the fabric to update")
+    name: Optional[str] = Field(None, description="New fabric name")
+    image_url: Optional[str] = Field(None, description="New image URL (if already uploaded)")
+    image_data: Optional[str] = Field(None, description="Optional base64 image data to upload")
+    gallery: Optional[dict] = Field(None, description="New gallery data")
+
+
 class SearchFabricsInput(BaseModel):
     q: Optional[str] = Field(None, description="Free text search across fabric_code and name")
     fabric_code: Optional[str] = Field(None, description="Filter by fabric code (partial match)")
@@ -53,6 +61,17 @@ class CreateVariantInput(BaseModel):
     image_url: Optional[str] = Field(None, description="Optional image URL (if already uploaded)")
     image_data: Optional[str] = Field(None, description="Optional base64 image data to upload")
     gallery: dict = Field(default_factory=dict, description="Gallery with photoshoot namespaces, each having 'main' and 'images' array")
+
+
+class UpdateVariantInput(BaseModel):
+    variant_id: int = Field(description="ID of the variant to update")
+    color_code: Optional[str] = Field(None, description="New color code")
+    gsm: Optional[int] = Field(None, description="New GSM value")
+    width: Optional[int] = Field(None, description="New width in inches")
+    finish: Optional[str] = Field(None, description="New finish type")
+    image_url: Optional[str] = Field(None, description="New image URL (if already uploaded)")
+    image_data: Optional[str] = Field(None, description="Optional base64 image data to upload")
+    gallery: Optional[dict] = Field(None, description="New gallery data")
 
 
 class GetVariantInput(BaseModel):
@@ -128,6 +147,11 @@ async def list_tools() -> list[Tool]:
             inputSchema=CreateFabricInput.model_json_schema()
         ),
         Tool(
+            name="update_fabric",
+            description="Update an existing fabric (name, image, or gallery). Supports inline image upload via base64",
+            inputSchema=UpdateFabricInput.model_json_schema()
+        ),
+        Tool(
             name="search_fabrics",
             description="Search fabrics with optional filters and pagination",
             inputSchema=SearchFabricsInput.model_json_schema()
@@ -136,6 +160,11 @@ async def list_tools() -> list[Tool]:
             name="create_variant",
             description="Create a new fabric variant with color, GSM, width, and finish",
             inputSchema=CreateVariantInput.model_json_schema()
+        ),
+        Tool(
+            name="update_variant",
+            description="Update an existing variant (color, GSM, width, finish, image, or gallery). Supports inline image upload via base64",
+            inputSchema=UpdateVariantInput.model_json_schema()
         ),
         Tool(
             name="get_variant",
@@ -232,6 +261,41 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 text=f"Fabric created successfully:\n{serialize_result(result)}"
             )]
 
+        elif name == "update_fabric":
+            args = UpdateFabricInput(**arguments)
+
+            # Handle inline image upload
+            image_url = args.image_url
+            if args.image_data:
+                try:
+                    upload_result = cloudinary_upload(
+                        image_data=args.image_data,
+                        folder="traider/fabrics",
+                        filename=f"fabric_{args.fabric_id}"
+                    )
+                    image_url = upload_result['secure_url']
+                except Exception as e:
+                    return [TextContent(
+                        type="text",
+                        text=f"Error uploading image: {str(e)}"
+                    )]
+
+            result = repo.update_fabric(
+                fabric_id=args.fabric_id,
+                name=args.name,
+                image_url=image_url,
+                gallery=args.gallery
+            )
+            if result is None:
+                return [TextContent(
+                    type="text",
+                    text=f"Error: Fabric with id {args.fabric_id} not found"
+                )]
+            return [TextContent(
+                type="text",
+                text=f"Fabric updated successfully:\n{serialize_result(result)}"
+            )]
+
         elif name == "search_fabrics":
             args = SearchFabricsInput(**arguments)
             items, total = repo.search_fabrics(
@@ -288,6 +352,44 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             return [TextContent(
                 type="text",
                 text=f"Variant created successfully:\n{serialize_result(result)}"
+            )]
+
+        elif name == "update_variant":
+            args = UpdateVariantInput(**arguments)
+
+            # Handle inline image upload
+            image_url = args.image_url
+            if args.image_data:
+                try:
+                    upload_result = cloudinary_upload(
+                        image_data=args.image_data,
+                        folder="traider/variants",
+                        filename=f"variant_{args.variant_id}"
+                    )
+                    image_url = upload_result['secure_url']
+                except Exception as e:
+                    return [TextContent(
+                        type="text",
+                        text=f"Error uploading image: {str(e)}"
+                    )]
+
+            result = repo.update_variant(
+                variant_id=args.variant_id,
+                color_code=args.color_code,
+                gsm=args.gsm,
+                width=args.width,
+                finish=args.finish,
+                image_url=image_url,
+                gallery=args.gallery
+            )
+            if result is None:
+                return [TextContent(
+                    type="text",
+                    text=f"Error: Variant with id {args.variant_id} not found"
+                )]
+            return [TextContent(
+                type="text",
+                text=f"Variant updated successfully:\n{serialize_result(result)}"
             )]
 
         elif name == "get_variant":

@@ -38,6 +38,13 @@ class Fabric(BaseModel):
     gallery: Gallery = Field(default_factory=dict)
 
 
+class FabricUpdate(BaseModel):
+    name: Optional[str] = None
+    image_url: Optional[str] = None
+    image_data: Optional[str] = None
+    gallery: Optional[Gallery] = None
+
+
 # ============================================================================
 # Variants
 # ============================================================================
@@ -62,6 +69,16 @@ class Variant(BaseModel):
     finish: str
     image_url: Optional[str] = None
     gallery: Gallery = Field(default_factory=dict)
+
+
+class VariantUpdate(BaseModel):
+    color_code: Optional[str] = None
+    gsm: Optional[int] = None
+    width: Optional[int] = None
+    finish: Optional[str] = None
+    image_url: Optional[str] = None
+    image_data: Optional[str] = None
+    gallery: Optional[Gallery] = None
 
 
 class VariantDetail(BaseModel):

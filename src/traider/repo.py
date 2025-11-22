@@ -34,6 +34,51 @@ def create_fabric(fabric_code: str, name: str, image_url: Optional[str] = None, 
         return result
 
 
+def update_fabric(
+    fabric_id: int,
+    name: Optional[str] = None,
+    image_url: Optional[str] = None,
+    gallery: Optional[dict] = None
+) -> Optional[dict]:
+    """Update a fabric. Returns None if fabric doesn't exist."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # Check fabric exists
+            cur.execute("SELECT id FROM fabrics WHERE id = %s", (fabric_id,))
+            if not cur.fetchone():
+                return None
+
+            # Build dynamic update query
+            updates = []
+            params = {"id": fabric_id}
+
+            if name is not None:
+                updates.append("name = %(name)s")
+                params["name"] = name
+
+            if image_url is not None:
+                updates.append("image_url = %(image_url)s")
+                params["image_url"] = image_url
+
+            if gallery is not None:
+                updates.append("gallery = %(gallery)s")
+                params["gallery"] = json.dumps(gallery)
+
+            if not updates:
+                # No updates provided, just return current fabric
+                cur.execute(
+                    "SELECT id, fabric_code, name, image_url, gallery FROM fabrics WHERE id = %(id)s",
+                    params
+                )
+                return cur.fetchone()
+
+            update_sql = f"UPDATE fabrics SET {', '.join(updates)} WHERE id = %(id)s RETURNING id, fabric_code, name, image_url, gallery"
+            cur.execute(update_sql, params)
+            result = cur.fetchone()
+        conn.commit()
+        return result
+
+
 def search_fabrics(
     q: Optional[str] = None,
     fabric_code: Optional[str] = None,
@@ -133,6 +178,66 @@ def create_variant(
                     "gallery": json.dumps(gallery)
                 }
             )
+            result = cur.fetchone()
+        conn.commit()
+        return result
+
+
+def update_variant(
+    variant_id: int,
+    color_code: Optional[str] = None,
+    gsm: Optional[int] = None,
+    width: Optional[int] = None,
+    finish: Optional[str] = None,
+    image_url: Optional[str] = None,
+    gallery: Optional[dict] = None
+) -> Optional[dict]:
+    """Update a variant. Returns None if variant doesn't exist."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # Check variant exists
+            cur.execute("SELECT id FROM fabric_variants WHERE id = %s", (variant_id,))
+            if not cur.fetchone():
+                return None
+
+            # Build dynamic update query
+            updates = []
+            params = {"id": variant_id}
+
+            if color_code is not None:
+                updates.append("color_code = %(color_code)s")
+                params["color_code"] = color_code
+
+            if gsm is not None:
+                updates.append("gsm = %(gsm)s")
+                params["gsm"] = gsm
+
+            if width is not None:
+                updates.append("width = %(width)s")
+                params["width"] = width
+
+            if finish is not None:
+                updates.append("finish = %(finish)s")
+                params["finish"] = finish
+
+            if image_url is not None:
+                updates.append("image_url = %(image_url)s")
+                params["image_url"] = image_url
+
+            if gallery is not None:
+                updates.append("gallery = %(gallery)s")
+                params["gallery"] = json.dumps(gallery)
+
+            if not updates:
+                # No updates provided, just return current variant
+                cur.execute(
+                    "SELECT id, fabric_id, color_code, gsm, width, finish, image_url, gallery FROM fabric_variants WHERE id = %(id)s",
+                    params
+                )
+                return cur.fetchone()
+
+            update_sql = f"UPDATE fabric_variants SET {', '.join(updates)} WHERE id = %(id)s RETURNING id, fabric_id, color_code, gsm, width, finish, image_url, gallery"
+            cur.execute(update_sql, params)
             result = cur.fetchone()
         conn.commit()
         return result

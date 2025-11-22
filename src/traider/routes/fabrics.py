@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from psycopg import errors as pg_errors
 
-from traider.models import FabricCreate, Fabric, FabricSearchResult
+from traider.models import FabricCreate, FabricUpdate, Fabric, FabricSearchResult
 from traider import repo
 from traider.cloudinary_utils import upload_image as cloudinary_upload
 
@@ -36,6 +36,33 @@ def create_fabric(fabric: FabricCreate):
         return result
     except pg_errors.UniqueViolation:
         raise HTTPException(status_code=400, detail=f"Fabric code '{fabric.fabric_code}' already exists")
+
+
+@router.put("/{fabric_id}", response_model=Fabric)
+def update_fabric(fabric_id: int, fabric: FabricUpdate):
+    """Update an existing fabric."""
+    # Handle inline image upload
+    image_url = fabric.image_url
+    if fabric.image_data:
+        try:
+            upload_result = cloudinary_upload(
+                image_data=fabric.image_data,
+                folder="traider/fabrics",
+                filename=f"fabric_{fabric_id}"
+            )
+            image_url = upload_result['secure_url']
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Image upload failed: {str(e)}")
+
+    result = repo.update_fabric(
+        fabric_id=fabric_id,
+        name=fabric.name,
+        image_url=image_url,
+        gallery=fabric.gallery
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Fabric with id {fabric_id} not found")
+    return result
 
 
 @router.get("", response_model=FabricSearchResult)
