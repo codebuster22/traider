@@ -1,0 +1,528 @@
+"""MCP integration for FastAPI using SSE transport.
+
+This module provides MCP (Model Context Protocol) tools via HTTP/SSE,
+allowing AI clients like Claude to connect via URL instead of stdio.
+"""
+from typing import Any, Optional
+from decimal import Decimal
+
+from mcp.server import Server
+from mcp.types import Tool, TextContent
+from pydantic import BaseModel, Field
+
+from traider import repo
+from traider.cloudinary_utils import upload_image as cloudinary_upload
+
+
+# Initialize MCP server instance
+mcp_server = Server("fabric-inventory")
+
+
+# ============================================================================
+# Tool Input Schemas
+# ============================================================================
+
+class UploadImageInput(BaseModel):
+    image_data: str = Field(description="Base64 encoded image data (with or without data: URI prefix)")
+    filename: Optional[str] = Field(None, description="Optional filename (without extension)")
+    folder: str = Field("traider", description="Cloudinary folder path")
+
+
+class CreateFabricInput(BaseModel):
+    fabric_code: str = Field(description="Unique fabric code (e.g., 'FAB-001')")
+    name: str = Field(description="Fabric name (e.g., 'Cotton Jersey')")
+    image_url: Optional[str] = Field(None, description="Optional image URL (if already uploaded)")
+    image_data: Optional[str] = Field(None, description="Optional base64 image data to upload")
+    gallery: dict = Field(default_factory=dict, description="Gallery with photoshoot namespaces, each having 'main' and 'images' array")
+
+
+class UpdateFabricInput(BaseModel):
+    fabric_id: int = Field(description="ID of the fabric to update")
+    name: Optional[str] = Field(None, description="New fabric name")
+    image_url: Optional[str] = Field(None, description="New image URL (if already uploaded)")
+    image_data: Optional[str] = Field(None, description="Optional base64 image data to upload")
+    gallery: Optional[dict] = Field(None, description="New gallery data")
+
+
+class SearchFabricsInput(BaseModel):
+    q: Optional[str] = Field(None, description="Free text search across fabric_code and name")
+    fabric_code: Optional[str] = Field(None, description="Filter by fabric code (partial match)")
+    name: Optional[str] = Field(None, description="Filter by name (partial match)")
+    limit: int = Field(20, ge=1, le=100, description="Max results to return")
+    offset: int = Field(0, ge=0, description="Number of results to skip")
+
+
+class CreateVariantInput(BaseModel):
+    fabric_id: int = Field(description="ID of the parent fabric")
+    color_code: str = Field(description="Color code (e.g., 'BLK-9001')")
+    gsm: int = Field(description="Grams per square meter")
+    width: int = Field(description="Width in inches")
+    finish: str = Field(description="Finish type (e.g., 'Bio', 'Enzyme')")
+    image_url: Optional[str] = Field(None, description="Optional image URL (if already uploaded)")
+    image_data: Optional[str] = Field(None, description="Optional base64 image data to upload")
+    gallery: dict = Field(default_factory=dict, description="Gallery with photoshoot namespaces, each having 'main' and 'images' array")
+
+
+class UpdateVariantInput(BaseModel):
+    variant_id: int = Field(description="ID of the variant to update")
+    color_code: Optional[str] = Field(None, description="New color code")
+    gsm: Optional[int] = Field(None, description="New GSM value")
+    width: Optional[int] = Field(None, description="New width in inches")
+    finish: Optional[str] = Field(None, description="New finish type")
+    image_url: Optional[str] = Field(None, description="New image URL (if already uploaded)")
+    image_data: Optional[str] = Field(None, description="Optional base64 image data to upload")
+    gallery: Optional[dict] = Field(None, description="New gallery data")
+
+
+class GetVariantInput(BaseModel):
+    variant_id: int = Field(description="Variant ID to retrieve")
+
+
+class SearchVariantsInput(BaseModel):
+    q: Optional[str] = Field(None, description="Free text search")
+    fabric_id: Optional[int] = Field(None, description="Filter by fabric ID")
+    fabric_code: Optional[str] = Field(None, description="Filter by fabric code")
+    color_code: Optional[str] = Field(None, description="Filter by color code")
+    gsm: Optional[int] = Field(None, description="Filter by exact GSM")
+    gsm_min: Optional[int] = Field(None, description="Minimum GSM")
+    gsm_max: Optional[int] = Field(None, description="Maximum GSM")
+    include_stock: bool = Field(False, description="Include stock information")
+    in_stock_only: bool = Field(False, description="Only return variants with stock > 0")
+    limit: int = Field(20, ge=1, le=100, description="Max results to return")
+    offset: int = Field(0, ge=0, description="Number of results to skip")
+
+
+class MovementInput(BaseModel):
+    variant_id: int = Field(description="Variant ID to move stock for")
+    qty: float = Field(description="Quantity in meters")
+    uom: str = Field(description="Unit of measure: 'm' (meters)")
+    roll_count: Optional[int] = Field(None, description="Number of rolls (optional, for tracking)")
+    document_id: Optional[str] = Field(None, description="Invoice/receipt/document ID (optional)")
+    reason: Optional[str] = Field(None, description="Free-text reason for the movement")
+
+
+class GetStockInput(BaseModel):
+    variant_id: int = Field(description="Variant ID to get stock for")
+    uom: str = Field("m", description="Unit of measure for display: 'm' or 'roll'")
+
+
+class GetStockBatchInput(BaseModel):
+    variant_ids: list[int] = Field(description="List of variant IDs to get stock for")
+    uom: str = Field("m", description="Unit of measure for display: 'm' or 'roll'")
+
+
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+def serialize_result(result: Any) -> Any:
+    """Convert database results with Decimals to JSON-serializable format."""
+    if isinstance(result, dict):
+        return {k: serialize_result(v) for k, v in result.items()}
+    elif isinstance(result, list):
+        return [serialize_result(item) for item in result]
+    elif isinstance(result, Decimal):
+        return float(result)
+    elif hasattr(result, 'isoformat'):  # datetime objects
+        return result.isoformat()
+    return result
+
+
+# ============================================================================
+# MCP Server Handlers
+# ============================================================================
+
+@mcp_server.list_tools()
+async def list_tools() -> list[Tool]:
+    """List all available tools."""
+    return [
+        Tool(
+            name="upload_image",
+            description="Upload an image to Cloudinary and get back URLs (main URL and thumbnail). Returns secure_url to use in create_fabric/create_variant",
+            inputSchema=UploadImageInput.model_json_schema()
+        ),
+        Tool(
+            name="create_fabric",
+            description="Create a new fabric with code, name, and optional image (URL or base64 data)",
+            inputSchema=CreateFabricInput.model_json_schema()
+        ),
+        Tool(
+            name="update_fabric",
+            description="Update an existing fabric (name, image, or gallery). Supports inline image upload via base64",
+            inputSchema=UpdateFabricInput.model_json_schema()
+        ),
+        Tool(
+            name="search_fabrics",
+            description="Search fabrics with optional filters and pagination",
+            inputSchema=SearchFabricsInput.model_json_schema()
+        ),
+        Tool(
+            name="create_variant",
+            description="Create a new fabric variant with color, GSM, width, and finish",
+            inputSchema=CreateVariantInput.model_json_schema()
+        ),
+        Tool(
+            name="update_variant",
+            description="Update an existing variant (color, GSM, width, finish, image, or gallery). Supports inline image upload via base64",
+            inputSchema=UpdateVariantInput.model_json_schema()
+        ),
+        Tool(
+            name="get_variant",
+            description="Get variant details by ID, including joined fabric information",
+            inputSchema=GetVariantInput.model_json_schema()
+        ),
+        Tool(
+            name="search_variants",
+            description="Search variants with filters, optional stock information, and pagination",
+            inputSchema=SearchVariantsInput.model_json_schema()
+        ),
+        Tool(
+            name="receive_stock",
+            description="Record a receipt of fabric stock (increases inventory)",
+            inputSchema=MovementInput.model_json_schema()
+        ),
+        Tool(
+            name="issue_stock",
+            description="Record an issue/consumption of fabric stock (decreases inventory)",
+            inputSchema=MovementInput.model_json_schema()
+        ),
+        Tool(
+            name="adjust_stock",
+            description="Record a stock adjustment (can be positive or negative)",
+            inputSchema=MovementInput.model_json_schema()
+        ),
+        Tool(
+            name="get_stock",
+            description="Get current stock balance for a variant with roll/meter calculations",
+            inputSchema=GetStockInput.model_json_schema()
+        ),
+        Tool(
+            name="get_stock_batch",
+            description="Get stock balances for multiple variants at once",
+            inputSchema=GetStockBatchInput.model_json_schema()
+        ),
+    ]
+
+
+@mcp_server.call_tool()
+async def call_tool(name: str, arguments: Any) -> list[TextContent]:
+    """Handle tool calls."""
+    try:
+        if name == "upload_image":
+            args = UploadImageInput(**arguments)
+            try:
+                upload_result = cloudinary_upload(
+                    image_data=args.image_data,
+                    folder=args.folder,
+                    filename=args.filename
+                )
+                return [TextContent(
+                    type="text",
+                    text=f"Image uploaded successfully:\n"
+                         f"URL: {upload_result['secure_url']}\n"
+                         f"Thumbnail: {upload_result['thumbnail_url']}\n"
+                         f"Size: {upload_result['width']}x{upload_result['height']}\n"
+                         f"Format: {upload_result['format']}\n"
+                         f"Public ID: {upload_result['public_id']}"
+                )]
+            except Exception as e:
+                return [TextContent(
+                    type="text",
+                    text=f"Error uploading image: {str(e)}"
+                )]
+
+        elif name == "create_fabric":
+            args = CreateFabricInput(**arguments)
+
+            # Handle inline image upload
+            image_url = args.image_url
+            if args.image_data:
+                try:
+                    upload_result = cloudinary_upload(
+                        image_data=args.image_data,
+                        folder="traider/fabrics",
+                        filename=args.fabric_code
+                    )
+                    image_url = upload_result['secure_url']
+                except Exception as e:
+                    return [TextContent(
+                        type="text",
+                        text=f"Error uploading image: {str(e)}"
+                    )]
+
+            result = repo.create_fabric(
+                fabric_code=args.fabric_code,
+                name=args.name,
+                image_url=image_url,
+                gallery=args.gallery
+            )
+            return [TextContent(
+                type="text",
+                text=f"Fabric created successfully:\n{serialize_result(result)}"
+            )]
+
+        elif name == "update_fabric":
+            args = UpdateFabricInput(**arguments)
+
+            # Handle inline image upload
+            image_url = args.image_url
+            if args.image_data:
+                try:
+                    upload_result = cloudinary_upload(
+                        image_data=args.image_data,
+                        folder="traider/fabrics",
+                        filename=f"fabric_{args.fabric_id}"
+                    )
+                    image_url = upload_result['secure_url']
+                except Exception as e:
+                    return [TextContent(
+                        type="text",
+                        text=f"Error uploading image: {str(e)}"
+                    )]
+
+            result = repo.update_fabric(
+                fabric_id=args.fabric_id,
+                name=args.name,
+                image_url=image_url,
+                gallery=args.gallery
+            )
+            if result is None:
+                return [TextContent(
+                    type="text",
+                    text=f"Error: Fabric with id {args.fabric_id} not found"
+                )]
+            return [TextContent(
+                type="text",
+                text=f"Fabric updated successfully:\n{serialize_result(result)}"
+            )]
+
+        elif name == "search_fabrics":
+            args = SearchFabricsInput(**arguments)
+            items, total = repo.search_fabrics(
+                q=args.q,
+                fabric_code=args.fabric_code,
+                name=args.name,
+                limit=args.limit,
+                offset=args.offset
+            )
+            result = {
+                "items": serialize_result(items),
+                "total": total,
+                "limit": args.limit,
+                "offset": args.offset
+            }
+            return [TextContent(
+                type="text",
+                text=f"Found {total} fabrics:\n{result}"
+            )]
+
+        elif name == "create_variant":
+            args = CreateVariantInput(**arguments)
+
+            # Handle inline image upload
+            image_url = args.image_url
+            if args.image_data:
+                try:
+                    upload_result = cloudinary_upload(
+                        image_data=args.image_data,
+                        folder="traider/variants",
+                        filename=f"{args.fabric_id}_{args.color_code}"
+                    )
+                    image_url = upload_result['secure_url']
+                except Exception as e:
+                    return [TextContent(
+                        type="text",
+                        text=f"Error uploading image: {str(e)}"
+                    )]
+
+            result = repo.create_variant(
+                fabric_id=args.fabric_id,
+                color_code=args.color_code,
+                gsm=args.gsm,
+                width=args.width,
+                finish=args.finish,
+                image_url=image_url,
+                gallery=args.gallery
+            )
+            if result is None:
+                return [TextContent(
+                    type="text",
+                    text=f"Error: Fabric with id {args.fabric_id} not found"
+                )]
+            return [TextContent(
+                type="text",
+                text=f"Variant created successfully:\n{serialize_result(result)}"
+            )]
+
+        elif name == "update_variant":
+            args = UpdateVariantInput(**arguments)
+
+            # Handle inline image upload
+            image_url = args.image_url
+            if args.image_data:
+                try:
+                    upload_result = cloudinary_upload(
+                        image_data=args.image_data,
+                        folder="traider/variants",
+                        filename=f"variant_{args.variant_id}"
+                    )
+                    image_url = upload_result['secure_url']
+                except Exception as e:
+                    return [TextContent(
+                        type="text",
+                        text=f"Error uploading image: {str(e)}"
+                    )]
+
+            result = repo.update_variant(
+                variant_id=args.variant_id,
+                color_code=args.color_code,
+                gsm=args.gsm,
+                width=args.width,
+                finish=args.finish,
+                image_url=image_url,
+                gallery=args.gallery
+            )
+            if result is None:
+                return [TextContent(
+                    type="text",
+                    text=f"Error: Variant with id {args.variant_id} not found"
+                )]
+            return [TextContent(
+                type="text",
+                text=f"Variant updated successfully:\n{serialize_result(result)}"
+            )]
+
+        elif name == "get_variant":
+            args = GetVariantInput(**arguments)
+            result = repo.get_variant_detail(args.variant_id)
+            if result is None:
+                return [TextContent(
+                    type="text",
+                    text=f"Error: Variant with id {args.variant_id} not found"
+                )]
+            return [TextContent(
+                type="text",
+                text=f"Variant details:\n{serialize_result(result)}"
+            )]
+
+        elif name == "search_variants":
+            args = SearchVariantsInput(**arguments)
+            items, total = repo.search_variants(
+                q=args.q,
+                fabric_id=args.fabric_id,
+                fabric_code=args.fabric_code,
+                color_code=args.color_code,
+                gsm=args.gsm,
+                gsm_min=args.gsm_min,
+                gsm_max=args.gsm_max,
+                include_stock=args.include_stock,
+                in_stock_only=args.in_stock_only,
+                limit=args.limit,
+                offset=args.offset
+            )
+            result = {
+                "items": serialize_result(items),
+                "total": total,
+                "limit": args.limit,
+                "offset": args.offset
+            }
+            return [TextContent(
+                type="text",
+                text=f"Found {total} variants:\n{result}"
+            )]
+
+        elif name == "receive_stock":
+            args = MovementInput(**arguments)
+            result = repo.create_movement(
+                variant_id=args.variant_id,
+                movement_type="RECEIPT",
+                qty=args.qty,
+                uom=args.uom,
+                roll_count=args.roll_count,
+                document_id=args.document_id,
+                reason=args.reason
+            )
+            if result is None:
+                return [TextContent(
+                    type="text",
+                    text=f"Error: Variant with id {args.variant_id} not found"
+                )]
+            return [TextContent(
+                type="text",
+                text=f"Stock received successfully:\n{serialize_result(result)}"
+            )]
+
+        elif name == "issue_stock":
+            args = MovementInput(**arguments)
+            result = repo.create_movement(
+                variant_id=args.variant_id,
+                movement_type="ISSUE",
+                qty=-abs(args.qty),  # Always negative for issues
+                uom=args.uom,
+                roll_count=-abs(args.roll_count) if args.roll_count is not None else None,  # Also negative for rolls
+                document_id=args.document_id,
+                reason=args.reason
+            )
+            if result is None:
+                return [TextContent(
+                    type="text",
+                    text=f"Error: Variant with id {args.variant_id} not found"
+                )]
+            return [TextContent(
+                type="text",
+                text=f"Stock issued successfully:\n{serialize_result(result)}"
+            )]
+
+        elif name == "adjust_stock":
+            args = MovementInput(**arguments)
+            result = repo.create_movement(
+                variant_id=args.variant_id,
+                movement_type="ADJUST",
+                qty=args.qty,
+                uom=args.uom,
+                roll_count=args.roll_count,
+                document_id=args.document_id,
+                reason=args.reason
+            )
+            if result is None:
+                return [TextContent(
+                    type="text",
+                    text=f"Error: Variant with id {args.variant_id} not found"
+                )]
+            return [TextContent(
+                type="text",
+                text=f"Stock adjusted successfully:\n{serialize_result(result)}"
+            )]
+
+        elif name == "get_stock":
+            args = GetStockInput(**arguments)
+            result = repo.get_stock_balance(args.variant_id, args.uom)
+            if result is None:
+                return [TextContent(
+                    type="text",
+                    text=f"Error: Variant with id {args.variant_id} not found"
+                )]
+            return [TextContent(
+                type="text",
+                text=f"Stock balance:\n{serialize_result(result)}"
+            )]
+
+        elif name == "get_stock_batch":
+            args = GetStockBatchInput(**arguments)
+            results = repo.get_stock_balances_batch(args.variant_ids, args.uom)
+            return [TextContent(
+                type="text",
+                text=f"Stock balances for {len(results)} variants:\n{serialize_result(results)}"
+            )]
+
+        else:
+            return [TextContent(
+                type="text",
+                text=f"Error: Unknown tool '{name}'"
+            )]
+
+    except Exception as e:
+        return [TextContent(
+            type="text",
+            text=f"Error executing {name}: {str(e)}"
+        )]

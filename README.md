@@ -1,5 +1,113 @@
 # v1 Traider - An AI powered OS for Textile Trades
 
+## Quick Start
+
+### Prerequisites
+- Python 3.11+
+- [UV](https://docs.astral.sh/uv/) (Python package manager)
+- PostgreSQL database
+
+### Installation
+
+1. **Clone the repository**
+
+2. **Install UV** (if not already installed):
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+3. **Install dependencies with UV**:
+```bash
+uv sync
+```
+
+4. **Set up environment**:
+```bash
+export DATABASE_URL=postgresql://user:pass@localhost:5432/inventory
+```
+
+5. **Run the service**:
+```bash
+./run.sh
+# Or directly with UV:
+uv run traider-server
+```
+
+The API will be available at `http://localhost:8000`
+
+Interactive API documentation: `http://localhost:8000/docs`
+
+MCP endpoint for AI integration: `http://localhost:8000/mcp/sse`
+
+### Alternative: Direct Python Run
+
+If you prefer not to use UV entry points:
+```bash
+uv run python -m uvicorn traider.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### Example Flow
+
+```bash
+# Create a fabric
+curl -X POST http://localhost:8000/fabrics \
+  -H "Content-Type: application/json" \
+  -d '{"fabric_code": "FAB-001", "name": "Cotton Jersey"}'
+
+# Create a variant
+curl -X POST http://localhost:8000/variants \
+  -H "Content-Type: application/json" \
+  -d '{"fabric_id": 1, "color_code": "BLK-9001", "gsm": 180, "width": 72, "finish": "Bio"}'
+
+# Receive stock (3 rolls = 600 meters)
+curl -X POST http://localhost:8000/receive \
+  -H "Content-Type: application/json" \
+  -d '{"variant_id": 1, "qty": 3, "uom": "roll", "reason": "PO-2219"}'
+
+# Check stock
+curl "http://localhost:8000/stock?variant_id=1&uom=roll"
+```
+
+## MCP Server (AI Integration)
+
+This service includes an **MCP (Model Context Protocol) server** integrated into the FastAPI application. AI assistants like Claude can connect via HTTP/SSE and interact with your inventory using natural language.
+
+### Setup for Claude Desktop
+
+1. **Start the FastAPI service**:
+```bash
+./run.sh
+```
+
+2. **Edit your Claude Desktop configuration**:
+   - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+   - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+
+3. **Add this configuration**:
+```json
+{
+  "mcpServers": {
+    "fabric-inventory": {
+      "url": "http://localhost:8000/mcp/sse"
+    }
+  }
+}
+```
+
+4. **Restart Claude Desktop**
+
+5. **You can now ask Claude to manage your inventory**:
+   - "Create a fabric with code FAB-001 and name Cotton Jersey"
+   - "Show me all variants that are in stock"
+   - "Receive 5 rolls of variant 1 with reason 'PO-2219'"
+   - "What's the current stock for all variants?"
+
+The MCP server runs at: `http://localhost:8000/mcp/sse`
+
+See [MCP_SERVER.md](MCP_SERVER.md) for complete documentation, including production HTTPS setup.
+
+---
+
 # Problem statement (business-first)
 
 Teams need a **single, dead-simple source of truth** to answer:
@@ -70,19 +178,26 @@ No authentication. Keep everything minimal and predictable.
 
 * `DATABASE_URL=postgresql://user:pass@host:5432/inventory`
 
-## Project layout (suggested)
+## Project layout
 
 ```
-app/
-  main.py            # FastAPI app, startup init_db()
-  db.py              # connect(), init_db(), helpers
-  models.py          # Pydantic schemas
-  repo.py            # SQL helpers (lookup, insert, upsert)
-  routes/
-    fabrics.py
-    variants.py
-    movements.py
-    stock.py
+pyproject.toml       # UV/Python project configuration
+.python-version      # Python version for UV
+src/
+  traider/
+    __init__.py      # Package definition
+    cli.py           # Entry points (traider-server command)
+    main.py          # FastAPI app, startup init_db()
+    db.py            # connect(), init_db(), helpers
+    models.py        # Pydantic schemas
+    repo.py          # SQL helpers (lookup, insert, upsert)
+    mcp.py           # MCP tool definitions
+    routes/
+      fabrics.py     # Fabric CRUD endpoints
+      variants.py    # Variant CRUD endpoints
+      movements.py   # Stock movement endpoints
+      stock.py       # Stock query endpoints
+      mcp.py         # MCP SSE endpoint
 ```
 
 ---
