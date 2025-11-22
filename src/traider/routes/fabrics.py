@@ -5,6 +5,7 @@ from psycopg import errors as pg_errors
 
 from traider.models import FabricCreate, Fabric, FabricSearchResult
 from traider import repo
+from traider.cloudinary_utils import upload_image as cloudinary_upload
 
 router = APIRouter(prefix="/fabrics", tags=["fabrics"])
 
@@ -13,10 +14,23 @@ router = APIRouter(prefix="/fabrics", tags=["fabrics"])
 def create_fabric(fabric: FabricCreate):
     """Create a new fabric."""
     try:
+        # Handle inline image upload
+        image_url = fabric.image_url
+        if fabric.image_data:
+            try:
+                upload_result = cloudinary_upload(
+                    image_data=fabric.image_data,
+                    folder="traider/fabrics",
+                    filename=fabric.fabric_code
+                )
+                image_url = upload_result['secure_url']
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Image upload failed: {str(e)}")
+
         result = repo.create_fabric(
             fabric_code=fabric.fabric_code,
             name=fabric.name,
-            image_url=fabric.image_url,
+            image_url=image_url,
             gallery=fabric.gallery
         )
         return result

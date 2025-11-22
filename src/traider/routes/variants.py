@@ -5,6 +5,7 @@ from psycopg import errors as pg_errors
 
 from traider.models import VariantCreate, Variant, VariantDetail, VariantSearchResult
 from traider import repo
+from traider.cloudinary_utils import upload_image as cloudinary_upload
 
 router = APIRouter(prefix="/variants", tags=["variants"])
 
@@ -13,13 +14,26 @@ router = APIRouter(prefix="/variants", tags=["variants"])
 def create_variant(variant: VariantCreate):
     """Create a new variant."""
     try:
+        # Handle inline image upload
+        image_url = variant.image_url
+        if variant.image_data:
+            try:
+                upload_result = cloudinary_upload(
+                    image_data=variant.image_data,
+                    folder="traider/variants",
+                    filename=f"{variant.fabric_id}_{variant.color_code}"
+                )
+                image_url = upload_result['secure_url']
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Image upload failed: {str(e)}")
+
         result = repo.create_variant(
             fabric_id=variant.fabric_id,
             color_code=variant.color_code,
             gsm=variant.gsm,
             width=variant.width,
             finish=variant.finish,
-            image_url=variant.image_url,
+            image_url=image_url,
             gallery=variant.gallery
         )
         if result is None:

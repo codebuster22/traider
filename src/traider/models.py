@@ -26,6 +26,7 @@ class FabricCreate(BaseModel):
     fabric_code: str
     name: str
     image_url: Optional[str] = None
+    image_data: Optional[str] = None
     gallery: Gallery = Field(default_factory=dict)
 
 
@@ -48,6 +49,7 @@ class VariantCreate(BaseModel):
     width: int
     finish: str
     image_url: Optional[str] = None
+    image_data: Optional[str] = None
     gallery: Gallery = Field(default_factory=dict)
 
 

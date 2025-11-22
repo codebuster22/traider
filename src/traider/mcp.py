@@ -11,6 +11,7 @@ from mcp.types import Tool, TextContent
 from pydantic import BaseModel, Field
 
 from traider import repo
+from traider.cloudinary_utils import upload_image as cloudinary_upload
 
 
 # Initialize MCP server instance
@@ -21,10 +22,17 @@ mcp_server = Server("fabric-inventory")
 # Tool Input Schemas
 # ============================================================================
 
+class UploadImageInput(BaseModel):
+    image_data: str = Field(description="Base64 encoded image data (with or without data: URI prefix)")
+    filename: Optional[str] = Field(None, description="Optional filename (without extension)")
+    folder: str = Field("traider", description="Cloudinary folder path")
+
+
 class CreateFabricInput(BaseModel):
     fabric_code: str = Field(description="Unique fabric code (e.g., 'FAB-001')")
     name: str = Field(description="Fabric name (e.g., 'Cotton Jersey')")
-    image_url: Optional[str] = Field(None, description="Optional image URL")
+    image_url: Optional[str] = Field(None, description="Optional image URL (if already uploaded)")
+    image_data: Optional[str] = Field(None, description="Optional base64 image data to upload")
     gallery: dict = Field(default_factory=dict, description="Gallery with photoshoot namespaces, each having 'main' and 'images' array")
 
 
@@ -42,7 +50,8 @@ class CreateVariantInput(BaseModel):
     gsm: int = Field(description="Grams per square meter")
     width: int = Field(description="Width in inches")
     finish: str = Field(description="Finish type (e.g., 'Bio', 'Enzyme')")
-    image_url: Optional[str] = Field(None, description="Optional image URL")
+    image_url: Optional[str] = Field(None, description="Optional image URL (if already uploaded)")
+    image_data: Optional[str] = Field(None, description="Optional base64 image data to upload")
     gallery: dict = Field(default_factory=dict, description="Gallery with photoshoot namespaces, each having 'main' and 'images' array")
 
 
@@ -109,8 +118,13 @@ async def list_tools() -> list[Tool]:
     """List all available tools."""
     return [
         Tool(
+            name="upload_image",
+            description="Upload an image to Cloudinary and get back URLs (main URL and thumbnail). Returns secure_url to use in create_fabric/create_variant",
+            inputSchema=UploadImageInput.model_json_schema()
+        ),
+        Tool(
             name="create_fabric",
-            description="Create a new fabric with code, name, and optional image URL",
+            description="Create a new fabric with code, name, and optional image (URL or base64 data)",
             inputSchema=CreateFabricInput.model_json_schema()
         ),
         Tool(
@@ -165,12 +179,52 @@ async def list_tools() -> list[Tool]:
 async def call_tool(name: str, arguments: Any) -> list[TextContent]:
     """Handle tool calls."""
     try:
-        if name == "create_fabric":
+        if name == "upload_image":
+            args = UploadImageInput(**arguments)
+            try:
+                upload_result = cloudinary_upload(
+                    image_data=args.image_data,
+                    folder=args.folder,
+                    filename=args.filename
+                )
+                return [TextContent(
+                    type="text",
+                    text=f"Image uploaded successfully:\n"
+                         f"URL: {upload_result['secure_url']}\n"
+                         f"Thumbnail: {upload_result['thumbnail_url']}\n"
+                         f"Size: {upload_result['width']}x{upload_result['height']}\n"
+                         f"Format: {upload_result['format']}\n"
+                         f"Public ID: {upload_result['public_id']}"
+                )]
+            except Exception as e:
+                return [TextContent(
+                    type="text",
+                    text=f"Error uploading image: {str(e)}"
+                )]
+
+        elif name == "create_fabric":
             args = CreateFabricInput(**arguments)
+
+            # Handle inline image upload
+            image_url = args.image_url
+            if args.image_data:
+                try:
+                    upload_result = cloudinary_upload(
+                        image_data=args.image_data,
+                        folder="traider/fabrics",
+                        filename=args.fabric_code
+                    )
+                    image_url = upload_result['secure_url']
+                except Exception as e:
+                    return [TextContent(
+                        type="text",
+                        text=f"Error uploading image: {str(e)}"
+                    )]
+
             result = repo.create_fabric(
                 fabric_code=args.fabric_code,
                 name=args.name,
-                image_url=args.image_url,
+                image_url=image_url,
                 gallery=args.gallery
             )
             return [TextContent(
@@ -200,13 +254,30 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
 
         elif name == "create_variant":
             args = CreateVariantInput(**arguments)
+
+            # Handle inline image upload
+            image_url = args.image_url
+            if args.image_data:
+                try:
+                    upload_result = cloudinary_upload(
+                        image_data=args.image_data,
+                        folder="traider/variants",
+                        filename=f"{args.fabric_id}_{args.color_code}"
+                    )
+                    image_url = upload_result['secure_url']
+                except Exception as e:
+                    return [TextContent(
+                        type="text",
+                        text=f"Error uploading image: {str(e)}"
+                    )]
+
             result = repo.create_variant(
                 fabric_id=args.fabric_id,
                 color_code=args.color_code,
                 gsm=args.gsm,
                 width=args.width,
                 finish=args.finish,
-                image_url=args.image_url,
+                image_url=image_url,
                 gallery=args.gallery
             )
             if result is None:
