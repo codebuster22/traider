@@ -79,6 +79,17 @@ ALTER TABLE fabrics
 
 ALTER TABLE fabric_variants
   ADD COLUMN IF NOT EXISTS gallery JSONB DEFAULT '{}'::jsonb;
+
+-- Migration: Add roll_count and document_id tracking to movements
+ALTER TABLE stock_movements
+  ADD COLUMN IF NOT EXISTS roll_count INT NULL;
+
+ALTER TABLE stock_movements
+  ADD COLUMN IF NOT EXISTS document_id TEXT NULL;
+
+-- Migration: Add roll tracking to stock balances
+ALTER TABLE stock_balances
+  ADD COLUMN IF NOT EXISTS on_hand_rolls NUMERIC(14,3) DEFAULT 0;
 """
 
 

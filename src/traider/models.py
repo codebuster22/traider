@@ -86,13 +86,14 @@ class MovementCreate(BaseModel):
     variant_id: int
     qty: float
     uom: Literal["m", "roll"]
+    roll_count: Optional[int] = None
+    document_id: Optional[str] = None
     reason: Optional[str] = None
 
     @field_validator("qty")
     @classmethod
     def validate_qty(cls, v):
-        if v == 0:
-            raise ValueError("qty cannot be zero")
+        # Allow qty=0 when only adjusting roll_count
         return v
 
 
@@ -124,8 +125,6 @@ class StockBalance(BaseModel):
 
     on_hand_m: float
     on_hand_rolls: float
-    whole_rolls: int
-    remainder_m: float
 
     uom: str
     updated_at: datetime
@@ -160,8 +159,6 @@ class VariantSearchItem(BaseModel):
     # Optional stock fields
     on_hand_m: Optional[float] = None
     on_hand_rolls: Optional[float] = None
-    whole_rolls: Optional[int] = None
-    remainder_m: Optional[float] = None
     updated_at: Optional[datetime] = None
 
 

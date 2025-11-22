@@ -66,8 +66,10 @@ class SearchVariantsInput(BaseModel):
 
 class MovementInput(BaseModel):
     variant_id: int = Field(description="Variant ID to move stock for")
-    qty: float = Field(description="Quantity to move")
-    uom: str = Field(description="Unit of measure: 'm' (meters) or 'roll'")
+    qty: float = Field(description="Quantity in meters")
+    uom: str = Field(description="Unit of measure: 'm' (meters)")
+    roll_count: Optional[int] = Field(None, description="Number of rolls (optional, for tracking)")
+    document_id: Optional[str] = Field(None, description="Invoice/receipt/document ID (optional)")
     reason: Optional[str] = Field(None, description="Free-text reason for the movement")
 
 
@@ -263,6 +265,8 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 movement_type="RECEIPT",
                 qty=args.qty,
                 uom=args.uom,
+                roll_count=args.roll_count,
+                document_id=args.document_id,
                 reason=args.reason
             )
             if result is None:
@@ -282,6 +286,8 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 movement_type="ISSUE",
                 qty=-abs(args.qty),  # Always negative for issues
                 uom=args.uom,
+                roll_count=-abs(args.roll_count) if args.roll_count is not None else None,  # Also negative for rolls
+                document_id=args.document_id,
                 reason=args.reason
             )
             if result is None:
@@ -301,6 +307,8 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 movement_type="ADJUST",
                 qty=args.qty,
                 uom=args.uom,
+                roll_count=args.roll_count,
+                document_id=args.document_id,
                 reason=args.reason
             )
             if result is None:

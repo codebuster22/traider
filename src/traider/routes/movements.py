@@ -15,6 +15,8 @@ def receive(movement: MovementCreate):
         movement_type="RECEIPT",
         qty=movement.qty,
         uom=movement.uom,
+        roll_count=movement.roll_count,
+        document_id=movement.document_id,
         reason=movement.reason
     )
     if result is None:
@@ -31,6 +33,8 @@ def issue(movement: MovementCreate):
         movement_type="ISSUE",
         qty=-abs(movement.qty),  # Always negative for issues
         uom=movement.uom,
+        roll_count=-abs(movement.roll_count) if movement.roll_count is not None else None,  # Also negative for rolls
+        document_id=movement.document_id,
         reason=movement.reason
     )
     if result is None:
@@ -46,6 +50,8 @@ def adjust(movement: MovementCreate):
         movement_type="ADJUST",
         qty=movement.qty,
         uom=movement.uom,
+        roll_count=movement.roll_count,
+        document_id=movement.document_id,
         reason=movement.reason
     )
     if result is None:

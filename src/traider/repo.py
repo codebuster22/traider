@@ -4,9 +4,6 @@ from decimal import Decimal
 import json
 from traider.db import get_conn
 
-# Constant for UOM conversion
-ROLL_TO_M = 200
-
 
 # ============================================================================
 # Fabrics
@@ -247,7 +244,7 @@ def search_variants(
     # Stock join
     if include_stock:
         stock_join = "LEFT JOIN stock_balances sb ON v.id = sb.variant_id"
-        stock_fields = ", sb.on_hand_m, sb.updated_at"
+        stock_fields = ", sb.on_hand_m, sb.on_hand_rolls, sb.updated_at"
     else:
         stock_join = ""
         stock_fields = ""
@@ -317,15 +314,6 @@ def search_variants(
             )
             items = cur.fetchall()
 
-    # Calculate derived stock fields
-    if include_stock:
-        for item in items:
-            if item.get("on_hand_m") is not None:
-                on_hand_m = float(item["on_hand_m"])
-                item["on_hand_rolls"] = on_hand_m / ROLL_TO_M
-                item["whole_rolls"] = int(on_hand_m // ROLL_TO_M)
-                item["remainder_m"] = on_hand_m - (item["whole_rolls"] * ROLL_TO_M)
-
     return items, total
 
 
@@ -338,15 +326,24 @@ def create_movement(
     movement_type: str,
     qty: float,
     uom: str,
+    roll_count: Optional[int] = None,
+    document_id: Optional[str] = None,
     reason: Optional[str] = None
 ) -> Optional[dict]:
     """
     Create a movement and update stock balance.
+
+    Meters are always the source of truth and updated on every movement.
+    Rolls are only updated when roll_count is provided.
+
     Returns dict with movement_id, movement_type, delta_qty_m, on_hand_m_after.
     Returns None if variant doesn't exist.
     """
-    # Calculate delta in meters
-    delta_qty_m = Decimal(str(qty)) if uom == "m" else Decimal(str(qty * ROLL_TO_M))
+    # User always provides meters - no conversion needed
+    delta_qty_m = Decimal(str(qty))
+
+    # Calculate delta for rolls (can be None)
+    delta_rolls = Decimal(str(roll_count)) if roll_count is not None else None
 
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -358,8 +355,14 @@ def create_movement(
             # Insert movement
             cur.execute(
                 """
-                INSERT INTO stock_movements (variant_id, movement_type, delta_qty_m, original_qty, original_uom, reason)
-                VALUES (%(variant_id)s, %(movement_type)s, %(delta_qty_m)s, %(original_qty)s, %(original_uom)s, %(reason)s)
+                INSERT INTO stock_movements (
+                    variant_id, movement_type, delta_qty_m, original_qty, original_uom,
+                    roll_count, document_id, reason
+                )
+                VALUES (
+                    %(variant_id)s, %(movement_type)s, %(delta_qty_m)s, %(original_qty)s, %(original_uom)s,
+                    %(roll_count)s, %(document_id)s, %(reason)s
+                )
                 RETURNING id
                 """,
                 {
@@ -368,21 +371,29 @@ def create_movement(
                     "delta_qty_m": delta_qty_m,
                     "original_qty": Decimal(str(qty)),
                     "original_uom": uom,
+                    "roll_count": roll_count,
+                    "document_id": document_id,
                     "reason": reason
                 }
             )
             movement_id = cur.fetchone()["id"]
 
-            # Upsert balance
+            # Upsert balance - meters always update, rolls only if provided
             cur.execute(
                 """
-                INSERT INTO stock_balances (variant_id, on_hand_m, updated_at)
-                VALUES (%(variant_id)s, %(delta_qty_m)s, now())
+                INSERT INTO stock_balances (variant_id, on_hand_m, on_hand_rolls, updated_at)
+                VALUES (%(variant_id)s, %(delta_qty_m)s, COALESCE(%(delta_rolls)s, 0), now())
                 ON CONFLICT (variant_id) DO UPDATE
-                SET on_hand_m = stock_balances.on_hand_m + EXCLUDED.on_hand_m,
+                SET
+                    on_hand_m = stock_balances.on_hand_m + EXCLUDED.on_hand_m,
+                    on_hand_rolls = CASE
+                        WHEN %(delta_rolls)s IS NOT NULL
+                        THEN stock_balances.on_hand_rolls + %(delta_rolls)s
+                        ELSE stock_balances.on_hand_rolls
+                    END,
                     updated_at = now()
                 """,
-                {"variant_id": variant_id, "delta_qty_m": delta_qty_m}
+                {"variant_id": variant_id, "delta_qty_m": delta_qty_m, "delta_rolls": delta_rolls}
             )
 
             # Get updated balance
@@ -423,6 +434,7 @@ def get_stock_balance(variant_id: int, uom: str = "m") -> Optional[dict]:
                     v.image_url as variant_image_url,
                     v.gallery as variant_gallery,
                     COALESCE(sb.on_hand_m, 0) as on_hand_m,
+                    COALESCE(sb.on_hand_rolls, 0) as on_hand_rolls,
                     COALESCE(sb.updated_at, now()) as updated_at
                 FROM fabric_variants v
                 JOIN fabrics f ON v.fabric_id = f.id
@@ -436,17 +448,8 @@ def get_stock_balance(variant_id: int, uom: str = "m") -> Optional[dict]:
             if not result:
                 return None
 
-            # Calculate derived fields
-            on_hand_m = float(result["on_hand_m"])
-            on_hand_rolls = on_hand_m / ROLL_TO_M
-            whole_rolls = int(on_hand_m // ROLL_TO_M)
-            remainder_m = on_hand_m - (whole_rolls * ROLL_TO_M)
-
             return {
                 **result,
-                "on_hand_rolls": on_hand_rolls,
-                "whole_rolls": whole_rolls,
-                "remainder_m": remainder_m,
                 "uom": uom
             }
 
@@ -474,6 +477,7 @@ def get_stock_balances_batch(variant_ids: list[int], uom: str = "m") -> list[dic
                     v.image_url as variant_image_url,
                     v.gallery as variant_gallery,
                     COALESCE(sb.on_hand_m, 0) as on_hand_m,
+                    COALESCE(sb.on_hand_rolls, 0) as on_hand_rolls,
                     COALESCE(sb.updated_at, now()) as updated_at
                 FROM fabric_variants v
                 JOIN fabrics f ON v.fabric_id = f.id
@@ -484,18 +488,8 @@ def get_stock_balances_batch(variant_ids: list[int], uom: str = "m") -> list[dic
             )
             results = cur.fetchall()
 
-            # Calculate derived fields
+            # Add uom to each result
             for result in results:
-                on_hand_m = float(result["on_hand_m"])
-                on_hand_rolls = on_hand_m / ROLL_TO_M
-                whole_rolls = int(on_hand_m // ROLL_TO_M)
-                remainder_m = on_hand_m - (whole_rolls * ROLL_TO_M)
-
-                result.update({
-                    "on_hand_rolls": on_hand_rolls,
-                    "whole_rolls": whole_rolls,
-                    "remainder_m": remainder_m,
-                    "uom": uom
-                })
+                result["uom"] = uom
 
             return results
