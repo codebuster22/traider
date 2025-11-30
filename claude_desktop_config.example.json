@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "fabric-inventory": {
-      "url": "http://localhost:8000/mcp/sse"
+      "url": "http://localhost:8000/mcp"
     }
   }
 }
