@@ -1,85 +1,58 @@
-"""MCP endpoints supporting HTTP Streamable transport with session persistence."""
+"""MCP endpoints supporting HTTP Streamable transport."""
 import asyncio
 import json
-import uuid
-from starlette.requests import Request
+from contextlib import asynccontextmanager
 
 from mcp.server.streamable_http import StreamableHTTPServerTransport
 
 from traider.mcp import mcp_server
 
 
-# Store active sessions - maps session_id to (transport, server_task)
-_sessions: dict[str, tuple[StreamableHTTPServerTransport, asyncio.Task]] = {}
+# ============================================================================
+# HTTP Streamable Transport - Pure ASGI handlers
+# ============================================================================
 
-
-async def get_or_create_session(session_id: str | None) -> tuple[str, StreamableHTTPServerTransport]:
-    """Get existing session or create a new one."""
-    # Generate session ID if not provided
-    if not session_id:
-        session_id = str(uuid.uuid4())
-
-    if session_id in _sessions:
-        transport, task = _sessions[session_id]
-        # Check if task is still running
-        if not task.done():
-            return session_id, transport
-        # Task finished, remove old session
-        del _sessions[session_id]
-
-    # Create new transport and session
+@asynccontextmanager
+async def create_transport_session(session_id: str | None):
+    """Create transport and run MCP server for a single request."""
     transport = StreamableHTTPServerTransport(
         mcp_session_id=session_id,
         is_json_response_enabled=True,
     )
 
-    # Connect and start server
-    streams_context = transport.connect()
-    streams = await streams_context.__aenter__()
-    read_stream, write_stream = streams
+    async with transport.connect() as streams:
+        read_stream, write_stream = streams
 
-    server_task = asyncio.create_task(
-        mcp_server.run(
-            read_stream,
-            write_stream,
-            mcp_server.create_initialization_options()
+        server_task = asyncio.create_task(
+            mcp_server.run(
+                read_stream,
+                write_stream,
+                mcp_server.create_initialization_options()
+            )
         )
-    )
 
-    _sessions[session_id] = (transport, server_task)
-
-    # Clean up session when server task completes
-    def cleanup_session(task):
-        if session_id in _sessions:
-            del _sessions[session_id]
-
-    server_task.add_done_callback(cleanup_session)
-
-    return session_id, transport
+        try:
+            yield transport
+        finally:
+            server_task.cancel()
+            try:
+                await server_task
+            except asyncio.CancelledError:
+                pass
 
 
-async def handle_mcp_post(request: Request):
-    """
-    Handle MCP POST requests with HTTP Streamable transport.
-
-    Sessions are persisted across requests using the Mcp-Session-Id header.
-    """
+async def mcp_post_asgi(scope, receive, send):
+    """Pure ASGI handler for MCP POST requests."""
     # Get session ID from headers
-    session_id = request.headers.get("mcp-session-id")
+    headers = dict(scope.get("headers", []))
+    session_id = headers.get(b"mcp-session-id", b"").decode() or None
 
-    # Get or create session
-    session_id, transport = await get_or_create_session(session_id)
-
-    # Pass ASGI primitives to the transport - it handles its own response
-    await transport.handle_request(request.scope, request.receive, request._send)
+    async with create_transport_session(session_id) as transport:
+        await transport.handle_request(scope, receive, send)
 
 
-async def handle_mcp_get(request: Request):
-    """
-    Handle MCP GET requests - return server info.
-
-    This endpoint provides discovery information about the MCP server.
-    """
+async def mcp_get_asgi(scope, receive, send):
+    """Pure ASGI handler for MCP GET requests - returns server info."""
     info = {
         "name": "fabric-inventory",
         "version": "1.0.0",
@@ -91,15 +64,75 @@ async def handle_mcp_get(request: Request):
 
     body = json.dumps(info).encode("utf-8")
 
-    await request._send({
+    await send({
         "type": "http.response.start",
         "status": 200,
         "headers": [
             [b"content-type", b"application/json"],
             [b"content-length", str(len(body)).encode()],
+            [b"access-control-allow-origin", b"*"],
+            [b"access-control-allow-methods", b"GET, POST, OPTIONS"],
+            [b"access-control-allow-headers", b"*"],
         ],
     })
-    await request._send({
+    await send({
         "type": "http.response.body",
         "body": body,
     })
+
+
+class MCPApp:
+    """
+    Pure ASGI application for MCP endpoint.
+
+    This handles GET (info), POST (protocol), and OPTIONS (CORS preflight) requests
+    without going through Starlette's request/response handling.
+    """
+
+    CORS_HEADERS = [
+        [b"access-control-allow-origin", b"*"],
+        [b"access-control-allow-methods", b"GET, POST, OPTIONS"],
+        [b"access-control-allow-headers", b"*"],
+        [b"access-control-max-age", b"86400"],
+    ]
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return
+
+        method = scope.get("method", "GET")
+
+        if method == "OPTIONS":
+            # CORS preflight
+            await send({
+                "type": "http.response.start",
+                "status": 204,
+                "headers": self.CORS_HEADERS,
+            })
+            await send({
+                "type": "http.response.body",
+                "body": b"",
+            })
+        elif method == "POST":
+            await mcp_post_asgi(scope, receive, send)
+        elif method == "GET":
+            await mcp_get_asgi(scope, receive, send)
+        else:
+            # Method not allowed
+            body = b'{"error": "Method not allowed"}'
+            await send({
+                "type": "http.response.start",
+                "status": 405,
+                "headers": [
+                    [b"content-type", b"application/json"],
+                    [b"content-length", str(len(body)).encode()],
+                ] + self.CORS_HEADERS,
+            })
+            await send({
+                "type": "http.response.body",
+                "body": body,
+            })
+
+
+# Export the ASGI app instance
+mcp_asgi_app = MCPApp()
