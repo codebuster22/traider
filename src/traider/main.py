@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 
 from traider.db import init_db, close_db
 from traider.routes import fabrics, variants, movements, stock
-from traider.routes.mcp import mcp_asgi_app
+from traider.routes.mcp import mcp_asgi_app, startup_mcp, shutdown_mcp
 
 
 @asynccontextmanager
@@ -14,8 +14,10 @@ async def lifespan(app: FastAPI):
     """Application lifespan: startup and shutdown."""
     # Startup
     init_db()
+    await startup_mcp()  # Initialize MCP transport and server
     yield
     # Shutdown
+    await shutdown_mcp()  # Clean up MCP
     close_db()
 
 
