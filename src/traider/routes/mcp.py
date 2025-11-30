@@ -1,9 +1,7 @@
-"""MCP endpoints supporting HTTP Streamable transport with session persistence."""
+"""MCP HTTP Streamable transport with proper lifespan management."""
 import asyncio
 import json
 import logging
-import uuid
-from dataclasses import dataclass
 from typing import Optional
 
 from mcp.server.streamable_http import StreamableHTTPServerTransport
@@ -13,110 +11,96 @@ from traider.mcp import mcp_server
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class MCPSession:
-    """Holds an active MCP session."""
-    transport: StreamableHTTPServerTransport
-    server_task: asyncio.Task
-    read_stream: any
-    write_stream: any
+# Global state - initialized in lifespan
+_transport: Optional[StreamableHTTPServerTransport] = None
+_server_task: Optional[asyncio.Task] = None
 
 
-# Global session storage
-_sessions: dict[str, MCPSession] = {}
-_session_lock = asyncio.Lock()
+async def startup_mcp():
+    """Initialize MCP transport and server. Called from lifespan startup."""
+    global _transport, _server_task
 
+    _transport = StreamableHTTPServerTransport(
+        mcp_session_id=None,  # Let transport manage session IDs
+        is_json_response_enabled=True,
+    )
 
-async def get_or_create_session(session_id: Optional[str]) -> tuple[str, MCPSession]:
-    """Get an existing session or create a new one."""
-    async with _session_lock:
-        # Generate session ID if not provided
-        if not session_id:
-            session_id = str(uuid.uuid4())
+    # Enter the connect context - this starts the message router
+    # We store the context manager so we can exit it later
+    _transport._connect_cm = _transport.connect()
+    streams = await _transport._connect_cm.__aenter__()
+    read_stream, write_stream = streams
 
-        # Check for existing valid session
-        if session_id in _sessions:
-            session = _sessions[session_id]
-            if not session.server_task.done():
-                return session_id, session
-            # Clean up dead session
-            del _sessions[session_id]
-
-        # Create new session
-        transport = StreamableHTTPServerTransport(
-            mcp_session_id=session_id,
-            is_json_response_enabled=True,
+    # Start MCP server as background task
+    _server_task = asyncio.create_task(
+        mcp_server.run(
+            read_stream,
+            write_stream,
+            mcp_server.create_initialization_options()
         )
+    )
 
-        # Manually enter the connect context
-        connect_gen = transport.connect()
-        streams = await connect_gen.__aenter__()
-        read_stream, write_stream = streams
-
-        # Start MCP server
-        server_task = asyncio.create_task(
-            mcp_server.run(
-                read_stream,
-                write_stream,
-                mcp_server.create_initialization_options()
-            )
-        )
-
-        session = MCPSession(
-            transport=transport,
-            server_task=server_task,
-            read_stream=read_stream,
-            write_stream=write_stream,
-        )
-        _sessions[session_id] = session
-
-        # Schedule cleanup when server task ends
-        def cleanup(task):
-            asyncio.create_task(_cleanup_session(session_id))
-
-        server_task.add_done_callback(cleanup)
-
-        return session_id, session
+    logger.info("MCP server started")
 
 
-async def _cleanup_session(session_id: str):
-    """Clean up a session."""
-    async with _session_lock:
-        if session_id in _sessions:
-            session = _sessions.pop(session_id)
-            if not session.server_task.done():
-                session.server_task.cancel()
-                try:
-                    await session.server_task
-                except asyncio.CancelledError:
-                    pass
+async def shutdown_mcp():
+    """Shutdown MCP transport and server. Called from lifespan shutdown."""
+    global _transport, _server_task
+
+    if _server_task:
+        _server_task.cancel()
+        try:
+            await _server_task
+        except asyncio.CancelledError:
+            pass
+        _server_task = None
+
+    if _transport and hasattr(_transport, '_connect_cm'):
+        try:
+            await _transport._connect_cm.__aexit__(None, None, None)
+        except Exception as e:
+            logger.warning(f"Error closing MCP transport: {e}")
+        _transport = None
+
+    logger.info("MCP server stopped")
 
 
 async def mcp_post_asgi(scope, receive, send):
-    """Handle MCP POST requests with session persistence."""
-    # Get session ID from headers
-    headers = dict(scope.get("headers", []))
-    session_id = headers.get(b"mcp-session-id", b"").decode() or None
+    """Handle MCP POST requests."""
+    global _transport
 
-    try:
-        session_id, session = await get_or_create_session(session_id)
-        await session.transport.handle_request(scope, receive, send)
-    except Exception as e:
-        logger.exception("Error handling MCP request")
-        body = json.dumps({"error": str(e)}).encode()
+    if _transport is None:
+        body = b'{"error": "MCP server not initialized"}'
         await send({
             "type": "http.response.start",
-            "status": 500,
+            "status": 503,
             "headers": [
                 [b"content-type", b"application/json"],
                 [b"content-length", str(len(body)).encode()],
                 [b"access-control-allow-origin", b"*"],
             ],
         })
-        await send({
-            "type": "http.response.body",
-            "body": body,
-        })
+        await send({"type": "http.response.body", "body": body})
+        return
+
+    try:
+        await _transport.handle_request(scope, receive, send)
+    except Exception as e:
+        logger.exception("Error handling MCP request")
+        body = json.dumps({"error": str(e)}).encode()
+        try:
+            await send({
+                "type": "http.response.start",
+                "status": 500,
+                "headers": [
+                    [b"content-type", b"application/json"],
+                    [b"content-length", str(len(body)).encode()],
+                    [b"access-control-allow-origin", b"*"],
+                ],
+            })
+            await send({"type": "http.response.body", "body": body})
+        except Exception:
+            pass  # Response may have already started
 
 
 async def mcp_get_asgi(scope, receive, send):
@@ -127,6 +111,7 @@ async def mcp_get_asgi(scope, receive, send):
         "protocol": "mcp",
         "transport": "streamable-http",
         "auth": "none",
+        "status": "running" if _transport else "not initialized",
         "documentation": "POST JSON-RPC messages to this endpoint. No authentication required."
     }
 
@@ -143,18 +128,11 @@ async def mcp_get_asgi(scope, receive, send):
             [b"access-control-allow-headers", b"*"],
         ],
     })
-    await send({
-        "type": "http.response.body",
-        "body": body,
-    })
+    await send({"type": "http.response.body", "body": body})
 
 
 class MCPApp:
-    """
-    Pure ASGI application for MCP endpoint with session persistence.
-
-    Sessions are maintained across requests using the Mcp-Session-Id header.
-    """
+    """Pure ASGI application for MCP endpoint."""
 
     CORS_HEADERS = [
         [b"access-control-allow-origin", b"*"],
@@ -175,10 +153,7 @@ class MCPApp:
                 "status": 204,
                 "headers": self.CORS_HEADERS,
             })
-            await send({
-                "type": "http.response.body",
-                "body": b"",
-            })
+            await send({"type": "http.response.body", "body": b""})
         elif method == "POST":
             await mcp_post_asgi(scope, receive, send)
         elif method == "GET":
@@ -193,11 +168,7 @@ class MCPApp:
                     [b"content-length", str(len(body)).encode()],
                 ] + self.CORS_HEADERS,
             })
-            await send({
-                "type": "http.response.body",
-                "body": body,
-            })
+            await send({"type": "http.response.body", "body": body})
 
 
-# Export the ASGI app instance
 mcp_asgi_app = MCPApp()
