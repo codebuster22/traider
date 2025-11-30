@@ -1,61 +1,85 @@
-"""MCP endpoints supporting HTTP Streamable transport."""
+"""MCP endpoints supporting HTTP Streamable transport with session persistence."""
 import asyncio
 import json
-from contextlib import asynccontextmanager
-from fastapi import APIRouter
+import uuid
+from starlette.requests import Request
 
 from mcp.server.streamable_http import StreamableHTTPServerTransport
 
 from traider.mcp import mcp_server
 
 
-router = APIRouter(tags=["mcp"])
+# Store active sessions - maps session_id to (transport, server_task)
+_sessions: dict[str, tuple[StreamableHTTPServerTransport, asyncio.Task]] = {}
 
 
-# ============================================================================
-# HTTP Streamable Transport
-# ============================================================================
+async def get_or_create_session(session_id: str | None) -> tuple[str, StreamableHTTPServerTransport]:
+    """Get existing session or create a new one."""
+    # Generate session ID if not provided
+    if not session_id:
+        session_id = str(uuid.uuid4())
 
-@asynccontextmanager
-async def create_streamable_transport(session_id: str | None):
-    """Create HTTP Streamable transport and run the MCP server."""
+    if session_id in _sessions:
+        transport, task = _sessions[session_id]
+        # Check if task is still running
+        if not task.done():
+            return session_id, transport
+        # Task finished, remove old session
+        del _sessions[session_id]
+
+    # Create new transport and session
     transport = StreamableHTTPServerTransport(
         mcp_session_id=session_id,
         is_json_response_enabled=True,
     )
 
-    async with transport.connect() as streams:
-        read_stream, write_stream = streams
+    # Connect and start server
+    streams_context = transport.connect()
+    streams = await streams_context.__aenter__()
+    read_stream, write_stream = streams
 
-        server_task = asyncio.create_task(
-            mcp_server.run(
-                read_stream,
-                write_stream,
-                mcp_server.create_initialization_options()
-            )
+    server_task = asyncio.create_task(
+        mcp_server.run(
+            read_stream,
+            write_stream,
+            mcp_server.create_initialization_options()
         )
+    )
 
-        try:
-            yield transport
-        finally:
-            server_task.cancel()
-            try:
-                await server_task
-            except asyncio.CancelledError:
-                pass
+    _sessions[session_id] = (transport, server_task)
 
+    # Clean up session when server task completes
+    def cleanup_session(task):
+        if session_id in _sessions:
+            del _sessions[session_id]
 
-async def handle_mcp_post(scope, receive, send):
-    """Handle MCP POST requests with HTTP Streamable transport."""
-    headers = dict(scope.get("headers", []))
-    session_id = headers.get(b"mcp-session-id", b"").decode() or None
+    server_task.add_done_callback(cleanup_session)
 
-    async with create_streamable_transport(session_id) as transport:
-        await transport.handle_request(scope, receive, send)
+    return session_id, transport
 
 
-async def handle_mcp_get(scope, receive, send):
-    """Handle MCP GET requests - return server info."""
+async def handle_mcp_post(request: Request):
+    """
+    Handle MCP POST requests with HTTP Streamable transport.
+
+    Sessions are persisted across requests using the Mcp-Session-Id header.
+    """
+    # Get session ID from headers
+    session_id = request.headers.get("mcp-session-id")
+
+    # Get or create session
+    session_id, transport = await get_or_create_session(session_id)
+
+    # Pass ASGI primitives to the transport - it handles its own response
+    await transport.handle_request(request.scope, request.receive, request._send)
+
+
+async def handle_mcp_get(request: Request):
+    """
+    Handle MCP GET requests - return server info.
+
+    This endpoint provides discovery information about the MCP server.
+    """
     info = {
         "name": "fabric-inventory",
         "version": "1.0.0",
@@ -64,9 +88,10 @@ async def handle_mcp_get(scope, receive, send):
         "auth": "none",
         "documentation": "POST JSON-RPC messages to this endpoint. No authentication required."
     }
+
     body = json.dumps(info).encode("utf-8")
 
-    await send({
+    await request._send({
         "type": "http.response.start",
         "status": 200,
         "headers": [
@@ -74,41 +99,7 @@ async def handle_mcp_get(scope, receive, send):
             [b"content-length", str(len(body)).encode()],
         ],
     })
-    await send({
+    await request._send({
         "type": "http.response.body",
         "body": body,
     })
-
-
-async def mcp_asgi_app(scope, receive, send):
-    """
-    Pure ASGI app for MCP endpoint.
-
-    Handles:
-    - GET /mcp - Returns server info
-    - POST /mcp - HTTP Streamable MCP protocol
-    """
-    if scope["type"] != "http":
-        return
-
-    method = scope.get("method", "GET")
-
-    if method == "GET":
-        await handle_mcp_get(scope, receive, send)
-    elif method == "POST":
-        await handle_mcp_post(scope, receive, send)
-    else:
-        # Method not allowed
-        body = b'{"error": "Method not allowed"}'
-        await send({
-            "type": "http.response.start",
-            "status": 405,
-            "headers": [
-                [b"content-type", b"application/json"],
-                [b"content-length", str(len(body)).encode()],
-            ],
-        })
-        await send({
-            "type": "http.response.body",
-            "body": body,
-        })
