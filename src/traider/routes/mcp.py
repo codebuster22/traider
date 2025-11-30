@@ -1,28 +1,59 @@
-"""MCP endpoints supporting HTTP Streamable transport."""
+"""MCP endpoints supporting HTTP Streamable transport with session persistence."""
 import asyncio
 import json
-from contextlib import asynccontextmanager
+import logging
+import uuid
+from dataclasses import dataclass
+from typing import Optional
 
 from mcp.server.streamable_http import StreamableHTTPServerTransport
 
 from traider.mcp import mcp_server
 
+logger = logging.getLogger(__name__)
 
-# ============================================================================
-# HTTP Streamable Transport - Pure ASGI handlers
-# ============================================================================
 
-@asynccontextmanager
-async def create_transport_session(session_id: str | None):
-    """Create transport and run MCP server for a single request."""
-    transport = StreamableHTTPServerTransport(
-        mcp_session_id=session_id,
-        is_json_response_enabled=True,
-    )
+@dataclass
+class MCPSession:
+    """Holds an active MCP session."""
+    transport: StreamableHTTPServerTransport
+    server_task: asyncio.Task
+    read_stream: any
+    write_stream: any
 
-    async with transport.connect() as streams:
+
+# Global session storage
+_sessions: dict[str, MCPSession] = {}
+_session_lock = asyncio.Lock()
+
+
+async def get_or_create_session(session_id: Optional[str]) -> tuple[str, MCPSession]:
+    """Get an existing session or create a new one."""
+    async with _session_lock:
+        # Generate session ID if not provided
+        if not session_id:
+            session_id = str(uuid.uuid4())
+
+        # Check for existing valid session
+        if session_id in _sessions:
+            session = _sessions[session_id]
+            if not session.server_task.done():
+                return session_id, session
+            # Clean up dead session
+            del _sessions[session_id]
+
+        # Create new session
+        transport = StreamableHTTPServerTransport(
+            mcp_session_id=session_id,
+            is_json_response_enabled=True,
+        )
+
+        # Manually enter the connect context
+        connect_gen = transport.connect()
+        streams = await connect_gen.__aenter__()
         read_stream, write_stream = streams
 
+        # Start MCP server
         server_task = asyncio.create_task(
             mcp_server.run(
                 read_stream,
@@ -31,28 +62,65 @@ async def create_transport_session(session_id: str | None):
             )
         )
 
-        try:
-            yield transport
-        finally:
-            server_task.cancel()
-            try:
-                await server_task
-            except asyncio.CancelledError:
-                pass
+        session = MCPSession(
+            transport=transport,
+            server_task=server_task,
+            read_stream=read_stream,
+            write_stream=write_stream,
+        )
+        _sessions[session_id] = session
+
+        # Schedule cleanup when server task ends
+        def cleanup(task):
+            asyncio.create_task(_cleanup_session(session_id))
+
+        server_task.add_done_callback(cleanup)
+
+        return session_id, session
+
+
+async def _cleanup_session(session_id: str):
+    """Clean up a session."""
+    async with _session_lock:
+        if session_id in _sessions:
+            session = _sessions.pop(session_id)
+            if not session.server_task.done():
+                session.server_task.cancel()
+                try:
+                    await session.server_task
+                except asyncio.CancelledError:
+                    pass
 
 
 async def mcp_post_asgi(scope, receive, send):
-    """Pure ASGI handler for MCP POST requests."""
+    """Handle MCP POST requests with session persistence."""
     # Get session ID from headers
     headers = dict(scope.get("headers", []))
     session_id = headers.get(b"mcp-session-id", b"").decode() or None
 
-    async with create_transport_session(session_id) as transport:
-        await transport.handle_request(scope, receive, send)
+    try:
+        session_id, session = await get_or_create_session(session_id)
+        await session.transport.handle_request(scope, receive, send)
+    except Exception as e:
+        logger.exception("Error handling MCP request")
+        body = json.dumps({"error": str(e)}).encode()
+        await send({
+            "type": "http.response.start",
+            "status": 500,
+            "headers": [
+                [b"content-type", b"application/json"],
+                [b"content-length", str(len(body)).encode()],
+                [b"access-control-allow-origin", b"*"],
+            ],
+        })
+        await send({
+            "type": "http.response.body",
+            "body": body,
+        })
 
 
 async def mcp_get_asgi(scope, receive, send):
-    """Pure ASGI handler for MCP GET requests - returns server info."""
+    """Handle MCP GET requests - returns server info."""
     info = {
         "name": "fabric-inventory",
         "version": "1.0.0",
@@ -83,10 +151,9 @@ async def mcp_get_asgi(scope, receive, send):
 
 class MCPApp:
     """
-    Pure ASGI application for MCP endpoint.
+    Pure ASGI application for MCP endpoint with session persistence.
 
-    This handles GET (info), POST (protocol), and OPTIONS (CORS preflight) requests
-    without going through Starlette's request/response handling.
+    Sessions are maintained across requests using the Mcp-Session-Id header.
     """
 
     CORS_HEADERS = [
@@ -103,7 +170,6 @@ class MCPApp:
         method = scope.get("method", "GET")
 
         if method == "OPTIONS":
-            # CORS preflight
             await send({
                 "type": "http.response.start",
                 "status": 204,
@@ -118,7 +184,6 @@ class MCPApp:
         elif method == "GET":
             await mcp_get_asgi(scope, receive, send)
         else:
-            # Method not allowed
             body = b'{"error": "Method not allowed"}'
             await send({
                 "type": "http.response.start",
