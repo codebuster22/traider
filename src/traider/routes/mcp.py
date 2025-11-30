@@ -41,18 +41,14 @@ async def create_transport_and_run(session_id: str | None):
                 pass
 
 
-async def mcp_asgi_handler(scope, receive, send):
-    """ASGI handler for MCP HTTP Streamable transport."""
+async def handle_mcp_post(scope, receive, send):
+    """Handle MCP POST requests with HTTP Streamable transport."""
     # Get session ID from headers
     headers = dict(scope.get("headers", []))
     session_id = headers.get(b"mcp-session-id", b"").decode() or None
 
     async with create_transport_and_run(session_id) as transport:
         await transport.handle_request(scope, receive, send)
-
-
-# Export the ASGI handler for mounting in main.py
-mcp_app = mcp_asgi_handler
 
 
 @router.get("/mcp")

@@ -23,7 +23,7 @@ def serve():
         sys.exit(1)
 
     print(f"Starting Traider Fabric Inventory Service on {host}:{port}")
-    print(f"MCP endpoint: http://{host}:{port}/mcp/sse")
+    print(f"MCP endpoint: http://{host}:{port}/mcp")
     print(f"API docs: http://{host}:{port}/docs")
 
     uvicorn.run(

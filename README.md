@@ -37,7 +37,7 @@ The API will be available at `http://localhost:8000`
 
 Interactive API documentation: `http://localhost:8000/docs`
 
-MCP endpoint for AI integration: `http://localhost:8000/mcp/sse`
+MCP endpoint for AI integration: `http://localhost:8000/mcp`
 
 ### Alternative: Direct Python Run
 
@@ -70,7 +70,7 @@ curl "http://localhost:8000/stock?variant_id=1&uom=roll"
 
 ## MCP Server (AI Integration)
 
-This service includes an **MCP (Model Context Protocol) server** integrated into the FastAPI application. AI assistants like Claude can connect via HTTP/SSE and interact with your inventory using natural language.
+This service includes an **MCP (Model Context Protocol) server** integrated into the FastAPI application. AI assistants like Claude can connect via HTTP Streamable transport and interact with your inventory using natural language.
 
 ### Setup for Claude Desktop
 
@@ -88,7 +88,7 @@ This service includes an **MCP (Model Context Protocol) server** integrated into
 {
   "mcpServers": {
     "fabric-inventory": {
-      "url": "http://localhost:8000/mcp/sse"
+      "url": "http://localhost:8000/mcp"
     }
   }
 }
@@ -102,7 +102,7 @@ This service includes an **MCP (Model Context Protocol) server** integrated into
    - "Receive 5 rolls of variant 1 with reason 'PO-2219'"
    - "What's the current stock for all variants?"
 
-The MCP server runs at: `http://localhost:8000/mcp/sse`
+The MCP server runs at: `http://localhost:8000/mcp`
 
 See [MCP_SERVER.md](MCP_SERVER.md) for complete documentation, including production HTTPS setup.
 
@@ -197,7 +197,7 @@ src/
       variants.py    # Variant CRUD endpoints
       movements.py   # Stock movement endpoints
       stock.py       # Stock query endpoints
-      mcp.py         # MCP SSE endpoint
+      mcp.py         # MCP HTTP Streamable endpoint
 ```
 
 ---
