@@ -8,7 +8,16 @@ Model Context Protocol (MCP) is an open protocol that enables AI assistants to s
 
 ## Transport Method
 
-The MCP server is integrated into the FastAPI application and uses **Server-Sent Events (SSE)** over HTTP/HTTPS. This means you simply add a URL to your MCP client configuration instead of running a separate process.
+The MCP server is integrated into the FastAPI application and uses **HTTP Streamable Transport** - the current MCP standard. This means you simply add a URL to your MCP client configuration instead of running a separate process.
+
+## Authentication
+
+**No authentication is required.** The MCP server is configured with:
+- CORS enabled for all origins (`*`)
+- No API keys or tokens needed
+- Simply connect using the endpoint URL
+
+For production, you may want to add authentication middleware.
 
 ## Available Tools
 
@@ -99,7 +108,7 @@ export DATABASE_URL=postgresql://user:pass@localhost:5432/inventory
 ./run.sh
 ```
 
-The MCP server will be available at: `http://localhost:8000/mcp/sse`
+The MCP server will be available at: `http://localhost:8000/mcp`
 
 ## Configuration for MCP Clients
 
@@ -114,7 +123,7 @@ Add this to your Claude Desktop configuration file:
 {
   "mcpServers": {
     "fabric-inventory": {
-      "url": "http://localhost:8000/mcp/sse"
+      "url": "http://localhost:8000/mcp"
     }
   }
 }
@@ -125,7 +134,7 @@ Add this to your Claude Desktop configuration file:
 {
   "mcpServers": {
     "fabric-inventory": {
-      "url": "https://your-domain.com/mcp/sse"
+      "url": "https://your-domain.com/mcp"
     }
   }
 }
@@ -135,12 +144,12 @@ Add this to your Claude Desktop configuration file:
 
 For other MCP clients, configure them to connect to:
 ```
-http://localhost:8000/mcp/sse
+http://localhost:8000/mcp
 ```
 
 Or in production:
 ```
-https://your-domain.com/mcp/sse
+https://your-domain.com/mcp
 ```
 
 ## Testing the MCP Server
@@ -154,10 +163,10 @@ https://your-domain.com/mcp/sse
 
 2. Verify the MCP endpoint is accessible:
 ```bash
-curl http://localhost:8000/mcp/sse
+curl http://localhost:8000/mcp
 ```
 
-You should see an SSE connection established.
+You should see server info including protocol and transport type.
 
 ### Using MCP Inspector
 
@@ -168,7 +177,7 @@ For interactive testing with the MCP Inspector:
 npm install -g @modelcontextprotocol/inspector
 
 # Test the HTTP endpoint
-mcp-inspector http://localhost:8000/mcp/sse
+mcp-inspector http://localhost:8000/mcp
 ```
 
 ## Usage Examples with Claude Desktop
@@ -198,14 +207,15 @@ Once configured, you can interact with Claude using natural language:
 │ (Claude Desktop)│
 └────────┬────────┘
          │ MCP Protocol
-         │ (HTTP/SSE)
+         │ (HTTP Streamable)
          │
 ┌────────▼────────────────────────┐
 │      FastAPI Application        │
+│         (CORS: all origins)     │
 │                                 │
 │  ┌──────────┐    ┌──────────┐  │
 │  │ REST API │    │ MCP /mcp │  │
-│  │ Routes   │    │ /sse     │  │
+│  │ Routes   │    │ endpoint │  │
 │  └────┬─────┘    └────┬─────┘  │
 │       │               │         │
 │       └───────┬───────┘         │
@@ -244,8 +254,8 @@ If Claude Desktop can't connect to the MCP server:
 
 2. **Check the MCP endpoint**:
    ```bash
-   curl http://localhost:8000/mcp/sse
-   # Should establish an SSE connection
+   curl http://localhost:8000/mcp
+   # Should return server info JSON
    ```
 
 3. **Review logs** (Claude Desktop → Settings → Developer → View Logs)
@@ -269,16 +279,15 @@ The FastAPI service automatically runs DDL at startup. If you see table errors:
 python -c "from app.db import init_db; init_db()"
 ```
 
-### CORS Issues (Production)
+### CORS Issues
 
-If connecting from a different domain, you may need to enable CORS in `app/main.py`:
+CORS is already enabled for all origins (`*`) by default. If you need to restrict origins for production:
 
 ```python
-from fastapi.middleware.cors import CORSMiddleware
-
+# In src/traider/main.py, modify the CORS middleware:
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://claude.ai"],  # Add your client origins
+    allow_origins=["https://claude.ai", "https://your-app.com"],  # Restrict to specific origins
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -304,19 +313,20 @@ To modify the MCP server:
 ## Security Notes
 
 - This MCP server has **no authentication** by default
-- Suitable for local development and trusted environments
-- For production deployments:
+- CORS is enabled for **all origins** (`*`)
+- Suitable for local development, trusted environments, and public MCP services
+- For production deployments with restricted access:
   - Use HTTPS (not HTTP)
-  - Add authentication middleware
+  - Add authentication middleware (API keys, OAuth, etc.)
   - Implement rate limiting
   - Use restricted database user permissions
-  - Enable CORS only for trusted origins
-  - Consider API keys or OAuth for MCP access
+  - Restrict CORS to specific trusted origins
 
 ## Related Files
 
 - `src/traider/mcp.py` - MCP tool definitions and handlers
-- `src/traider/routes/mcp.py` - SSE endpoint for HTTP/MCP transport
+- `src/traider/routes/mcp.py` - HTTP Streamable endpoint for MCP transport
+- `src/traider/main.py` - FastAPI app with CORS configuration
 - `src/traider/repo.py` - Repository layer (shared with REST API)
 - `src/traider/db.py` - Database connection (shared with REST API)
 - `src/traider/models.py` - Pydantic models (shared with REST API)
