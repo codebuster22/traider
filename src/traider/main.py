@@ -3,11 +3,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from starlette.routing import Mount
+from starlette.routing import Route
 
 from traider.db import init_db, close_db
 from traider.routes import fabrics, variants, movements, stock
-from traider.routes.mcp import router as mcp_router, mcp_asgi_app
+from traider.routes.mcp import handle_mcp_get, handle_mcp_post
 
 
 @asynccontextmanager
@@ -42,11 +42,11 @@ app.include_router(fabrics.router)
 app.include_router(variants.router)
 app.include_router(movements.router)
 app.include_router(stock.router)
-app.include_router(mcp_router)
 
-# Mount MCP ASGI app - this handles both GET info and POST requests
-# Using Mount allows the MCP transport to handle responses directly without FastAPI interference
-app.mount("/mcp", mcp_asgi_app)
+# Add MCP routes as raw Starlette routes (they handle their own ASGI responses)
+# Using Route instead of Mount avoids the trailing slash redirect issue
+app.routes.append(Route("/mcp", endpoint=handle_mcp_get, methods=["GET"]))
+app.routes.append(Route("/mcp", endpoint=handle_mcp_post, methods=["POST"]))
 
 
 @app.get("/")

@@ -2,14 +2,12 @@
 import asyncio
 import json
 from contextlib import asynccontextmanager
-from fastapi import APIRouter
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from mcp.server.streamable_http import StreamableHTTPServerTransport
 
 from traider.mcp import mcp_server
-
-
-router = APIRouter(tags=["mcp"])
 
 
 # ============================================================================
@@ -45,17 +43,27 @@ async def create_streamable_transport(session_id: str | None):
                 pass
 
 
-async def handle_mcp_post(scope, receive, send):
-    """Handle MCP POST requests with HTTP Streamable transport."""
-    headers = dict(scope.get("headers", []))
-    session_id = headers.get(b"mcp-session-id", b"").decode() or None
+async def handle_mcp_post(request: Request):
+    """
+    Handle MCP POST requests with HTTP Streamable transport.
+
+    This is a Starlette endpoint that extracts ASGI primitives from the Request
+    and passes them to the MCP transport, which handles its own response.
+    """
+    # Get session ID from headers
+    session_id = request.headers.get("mcp-session-id")
 
     async with create_streamable_transport(session_id) as transport:
-        await transport.handle_request(scope, receive, send)
+        # Pass ASGI primitives to the transport - it handles its own response
+        await transport.handle_request(request.scope, request.receive, request._send)
 
 
-async def handle_mcp_get(scope, receive, send):
-    """Handle MCP GET requests - return server info."""
+async def handle_mcp_get(request: Request):
+    """
+    Handle MCP GET requests - return server info.
+
+    This endpoint provides discovery information about the MCP server.
+    """
     info = {
         "name": "fabric-inventory",
         "version": "1.0.0",
@@ -64,9 +72,11 @@ async def handle_mcp_get(scope, receive, send):
         "auth": "none",
         "documentation": "POST JSON-RPC messages to this endpoint. No authentication required."
     }
+
+    # Use raw ASGI to send response (consistent with POST handler)
     body = json.dumps(info).encode("utf-8")
 
-    await send({
+    await request._send({
         "type": "http.response.start",
         "status": 200,
         "headers": [
@@ -74,41 +84,7 @@ async def handle_mcp_get(scope, receive, send):
             [b"content-length", str(len(body)).encode()],
         ],
     })
-    await send({
+    await request._send({
         "type": "http.response.body",
         "body": body,
     })
-
-
-async def mcp_asgi_app(scope, receive, send):
-    """
-    Pure ASGI app for MCP endpoint.
-
-    Handles:
-    - GET /mcp - Returns server info
-    - POST /mcp - HTTP Streamable MCP protocol
-    """
-    if scope["type"] != "http":
-        return
-
-    method = scope.get("method", "GET")
-
-    if method == "GET":
-        await handle_mcp_get(scope, receive, send)
-    elif method == "POST":
-        await handle_mcp_post(scope, receive, send)
-    else:
-        # Method not allowed
-        body = b'{"error": "Method not allowed"}'
-        await send({
-            "type": "http.response.start",
-            "status": 405,
-            "headers": [
-                [b"content-type", b"application/json"],
-                [b"content-length", str(len(body)).encode()],
-            ],
-        })
-        await send({
-            "type": "http.response.body",
-            "body": body,
-        })
