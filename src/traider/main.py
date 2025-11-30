@@ -1,13 +1,12 @@
 """FastAPI application for Fabric Inventory Service."""
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from starlette.routing import Route
 
 from traider.db import init_db, close_db
 from traider.routes import fabrics, variants, movements, stock
-from traider.routes.mcp import router as mcp_router, mcp_app
+from traider.routes.mcp import router as mcp_router, handle_mcp_post
 
 
 @asynccontextmanager
@@ -44,11 +43,12 @@ app.include_router(movements.router)
 app.include_router(stock.router)
 app.include_router(mcp_router)
 
-# Add the MCP POST endpoint as a raw ASGI route
-# mcp_app is an ASGI handler that sends its own response (HTTP Streamable transport)
-app.router.routes.append(
-    Route("/mcp", endpoint=mcp_app, methods=["POST"])
-)
+
+# MCP POST endpoint - extracts ASGI primitives from Request for HTTP Streamable transport
+@app.post("/mcp")
+async def mcp_post_endpoint(request: Request):
+    """MCP HTTP Streamable endpoint."""
+    await handle_mcp_post(request.scope, request.receive, request._send)
 
 
 @app.get("/")
