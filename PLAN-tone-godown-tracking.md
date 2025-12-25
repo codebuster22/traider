@@ -69,39 +69,59 @@ CREATE INDEX idx_tones_variant ON tones(variant_id);
 
 ### Modified Tables
 
-#### 3. `stock_balances` - New Composite Key
+#### 3. `stock_balances` - New Composite Key (Breaking Change)
 ```sql
--- Current: PRIMARY KEY (variant_id)
--- New: PRIMARY KEY (variant_id, tone_id, godown_id)
+-- Drop old table and recreate with new schema
+DROP TABLE IF EXISTS stock_balances;
 
--- Migration approach: Create new table, migrate data
-CREATE TABLE IF NOT EXISTS stock_balances_v2 (
+CREATE TABLE stock_balances (
     variant_id   BIGINT NOT NULL REFERENCES fabric_variants(id) ON DELETE CASCADE,
-    tone_id      BIGINT REFERENCES tones(id) ON DELETE CASCADE,  -- NULL = unspecified tone (legacy)
-    godown_id    BIGINT REFERENCES godowns(id) ON DELETE RESTRICT,  -- NULL = default godown
+    tone_id      BIGINT NOT NULL REFERENCES tones(id) ON DELETE CASCADE,
+    godown_id    BIGINT NOT NULL REFERENCES godowns(id) ON DELETE RESTRICT,
     on_hand_m    NUMERIC(14,3) DEFAULT 0,
     on_hand_rolls NUMERIC(14,3) DEFAULT 0,
     updated_at   TIMESTAMPTZ DEFAULT now(),
 
-    PRIMARY KEY (variant_id, COALESCE(tone_id, 0), COALESCE(godown_id, 0))
+    PRIMARY KEY (variant_id, tone_id, godown_id)
 );
 
-CREATE INDEX idx_stock_balances_v2_variant ON stock_balances_v2(variant_id);
-CREATE INDEX idx_stock_balances_v2_godown ON stock_balances_v2(godown_id);
-CREATE INDEX idx_stock_balances_v2_tone ON stock_balances_v2(tone_id);
+CREATE INDEX idx_stock_balances_variant ON stock_balances(variant_id);
+CREATE INDEX idx_stock_balances_godown ON stock_balances(godown_id);
+CREATE INDEX idx_stock_balances_tone ON stock_balances(tone_id);
+
+-- Prevent negative stock
+ALTER TABLE stock_balances
+ADD CONSTRAINT chk_non_negative CHECK (on_hand_m >= 0);
 ```
 
-#### 4. `stock_movements` - Add Tracking Fields
+#### 4. `stock_movements` - Add Required Tracking Fields (Breaking Change)
 ```sql
--- Add new columns (non-breaking)
-ALTER TABLE stock_movements
-ADD COLUMN tone_id BIGINT REFERENCES tones(id) ON DELETE SET NULL,
-ADD COLUMN godown_id BIGINT REFERENCES godowns(id) ON DELETE SET NULL,
-ADD COLUMN transfer_to_godown_id BIGINT REFERENCES godowns(id) ON DELETE SET NULL;
+-- Recreate table with required tone/godown columns
+DROP TABLE IF EXISTS stock_movements;
 
--- Index for efficient queries
+CREATE TABLE stock_movements (
+    id              BIGSERIAL PRIMARY KEY,
+    ts              TIMESTAMPTZ DEFAULT now(),
+    variant_id      BIGINT NOT NULL REFERENCES fabric_variants(id) ON DELETE CASCADE,
+    tone_id         BIGINT NOT NULL REFERENCES tones(id) ON DELETE CASCADE,
+    godown_id       BIGINT NOT NULL REFERENCES godowns(id) ON DELETE RESTRICT,
+    movement_type   TEXT NOT NULL CHECK (movement_type IN ('RECEIPT','ISSUE','ADJUST','TRANSFER')),
+    delta_qty_m     NUMERIC(14,3) NOT NULL,
+    original_qty    NUMERIC(14,3) NOT NULL,
+    original_uom    TEXT NOT NULL CHECK (original_uom IN ('m','roll')),
+    roll_count      INT,
+    document_id     TEXT,
+    reason          TEXT,
+    -- For TRANSFER movements: destination godown
+    transfer_to_godown_id BIGINT REFERENCES godowns(id) ON DELETE RESTRICT,
+    created_at      TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_movements_variant ON stock_movements(variant_id);
 CREATE INDEX idx_movements_tone ON stock_movements(tone_id);
 CREATE INDEX idx_movements_godown ON stock_movements(godown_id);
+CREATE INDEX idx_movements_type ON stock_movements(movement_type);
+CREATE INDEX idx_movements_ts ON stock_movements(ts);
 ```
 
 ---
@@ -198,75 +218,67 @@ POST   /transfer             - Transfer stock between godowns
 
 #### Stock Movements (`/receive`, `/issue`, `/adjust`)
 ```python
-# Current
+# New schema (Breaking Change - tone_id and godown_id now required)
 class MovementCreate(BaseModel):
     variant_id: int
+    tone_id: int              # REQUIRED - which tone
+    godown_id: int            # REQUIRED - which godown
     qty: float
     uom: Literal["m", "roll"]
-    roll_count: Optional[int]
-    document_id: Optional[str]
-    reason: Optional[str]
+    roll_count: Optional[int] = None
+    document_id: Optional[str] = None
+    reason: Optional[str] = None
 
-# Enhanced
-class MovementCreate(BaseModel):
+# Alternative for /receive - can create tone inline
+class ReceiveCreate(BaseModel):
     variant_id: int
+    godown_id: int            # REQUIRED
     qty: float
     uom: Literal["m", "roll"]
-    roll_count: Optional[int]
-    document_id: Optional[str]
-    reason: Optional[str]
-    # New fields
-    tone_id: Optional[int] = None       # If None, auto-create new tone on RECEIPT
-    tone_suffix: Optional[str] = None   # Alternative: specify suffix, system creates tone
-    godown_id: Optional[int] = None     # If None, use default godown
+    roll_count: Optional[int] = None
+    document_id: Optional[str] = None
+    reason: Optional[str] = None
+    # Tone: provide ONE of these
+    tone_id: Optional[int] = None         # Use existing tone
+    new_tone_suffix: Optional[str] = None # Create new tone with this suffix
 ```
 
 #### Receive Stock - Tone Handling
 ```python
-# Scenario 1: Explicit tone
+# Scenario 1: Add to existing tone
 POST /receive
 {
     "variant_id": 991,
+    "tone_id": 1,       # Existing tone A
+    "godown_id": 1,     # REQUIRED
     "qty": 500,
-    "uom": "m",
-    "tone_id": 1  # Existing tone A
+    "uom": "m"
 }
 
-# Scenario 2: Create new tone
+# Scenario 2: Create new tone on receive
 POST /receive
 {
     "variant_id": 991,
+    "new_tone_suffix": "B",  # Creates tone B
+    "godown_id": 1,
     "qty": 200,
     "uom": "m",
-    "tone_suffix": "B",  # Creates tone B if doesn't exist
     "reason": "New batch, slightly darker"
-}
-
-# Scenario 3: Auto-increment tone (optional convenience)
-POST /receive
-{
-    "variant_id": 991,
-    "qty": 300,
-    "uom": "m",
-    "auto_tone": true  # Creates next available suffix (C)
 }
 ```
 
-#### Issue Stock - Tone Requirement
+#### Issue Stock - All Fields Required
 ```python
-# MUST specify tone_id for issues (enforces single-tone fulfillment)
+# Both tone_id and godown_id are required
 POST /issue
 {
     "variant_id": 991,
+    "tone_id": 1,       # REQUIRED - from which tone
+    "godown_id": 1,     # REQUIRED - from which godown
     "qty": 400,
     "uom": "m",
-    "tone_id": 1,  # REQUIRED - from which tone to issue
-    "godown_id": 1,
     "document_id": "INV-2024-001"
 }
-
-# Error if tone_id not specified:
-# {"error": "tone_id is required for stock issue to ensure single-tone fulfillment"}
 ```
 
 #### Stock Query - Enhanced Response
@@ -313,49 +325,30 @@ GET /stock?variant_id=991&aggregate=true
 
 ---
 
-## Migration Strategy
+## Migration Strategy (Breaking Change - Clean Slate)
 
-### Phase 1: Database Schema (Non-breaking)
-1. Create `godowns` table
-2. Create `tones` table
-3. Add new columns to `stock_movements` (nullable)
-4. Create `stock_balances_v2` table
+Since breaking changes are allowed, we do a clean migration:
 
-### Phase 2: Default Data Setup
-1. Create default godown: `{"code": "DEFAULT", "name": "Default Godown", "is_default": true}`
-2. For existing stock, create "LEGACY" tone entries
-
-### Phase 3: Data Migration
+### Step 1: Create New Tables
 ```sql
--- For each existing variant with stock, create a legacy tone
-INSERT INTO tones (variant_id, suffix, description)
-SELECT DISTINCT variant_id, 'LEGACY', 'Pre-migration stock'
-FROM stock_balances
-WHERE on_hand_m > 0;
-
--- Migrate balances to new table
-INSERT INTO stock_balances_v2 (variant_id, tone_id, godown_id, on_hand_m, on_hand_rolls, updated_at)
-SELECT
-    sb.variant_id,
-    t.id as tone_id,
-    (SELECT id FROM godowns WHERE is_default = TRUE) as godown_id,
-    sb.on_hand_m,
-    sb.on_hand_rolls,
-    sb.updated_at
-FROM stock_balances sb
-JOIN tones t ON t.variant_id = sb.variant_id AND t.suffix = 'LEGACY';
+-- Run in order due to FK dependencies
+1. CREATE godowns table
+2. INSERT default godown
+3. CREATE tones table
+4. DROP and CREATE stock_movements (new schema)
+5. DROP and CREATE stock_balances (new schema)
 ```
 
-### Phase 4: API Updates
-1. Update models (Pydantic schemas)
-2. Update repository functions
-3. Update API endpoints
-4. Update MCP tools
+### Step 2: Seed Default Godown
+```sql
+INSERT INTO godowns (code, name, is_default)
+VALUES ('MAIN', 'Main Godown', TRUE);
+```
 
-### Phase 5: Deprecation
-1. Keep old stock_balances table read-only for compatibility
-2. All writes go to stock_balances_v2
-3. Eventually rename tables
+### Step 3: Historical Data
+- Existing stock_movements and stock_balances are **dropped**
+- Start fresh with new schema
+- If data preservation needed, export before migration
 
 ---
 
@@ -401,55 +394,46 @@ async def transfer_stock(
 
 ### Updated Tools
 ```python
-# Stock receipt - add tone/godown support
+# Stock receipt - tone and godown required
 @mcp.tool()
 async def receive_stock(
     variant_id: int,
+    godown_id: int,           # REQUIRED
     qty: float,
     uom: Literal["m", "roll"],
+    tone_id: int = None,      # Use existing tone OR
+    new_tone_suffix: str = None,  # Create new tone
     roll_count: int = None,
     document_id: str = None,
-    reason: str = None,
-    # New parameters
-    tone_id: int = None,
-    tone_suffix: str = None,  # Creates new tone if doesn't exist
-    godown_id: int = None     # Uses default if not specified
+    reason: str = None
 ) -> dict:
-    """Receive stock into inventory with tone and godown tracking"""
+    """Receive stock into inventory with tone and godown tracking.
+    Must provide either tone_id (existing) or new_tone_suffix (creates new)."""
 
-# Stock issue - require tone
+# Stock issue - all required
 @mcp.tool()
 async def issue_stock(
     variant_id: int,
+    tone_id: int,             # REQUIRED
+    godown_id: int,           # REQUIRED
     qty: float,
     uom: Literal["m", "roll"],
-    tone_id: int,             # REQUIRED
-    godown_id: int = None,
     reason: str = None,
     document_id: str = None
 ) -> dict:
-    """Issue stock from inventory (must specify tone to prevent mixing)"""
-```
+    """Issue stock from inventory. Both tone_id and godown_id required."""
 
----
-
-## Backward Compatibility
-
-### Approach: Graceful Degradation
-1. **tone_id = NULL in movements** → Treated as legacy data
-2. **godown_id = NULL** → Uses default godown
-3. **Old API calls without tone/godown** → Work with defaults
-4. **New API calls** → Full tone/godown tracking
-
-### Example: Old-style receive still works
-```python
-# Old call (no tone/godown)
-POST /receive {"variant_id": 991, "qty": 100, "uom": "m"}
-
-# System behavior:
-# 1. Creates new tone with auto-suffix (or uses "UNSPEC")
-# 2. Uses default godown
-# 3. Records movement with tone_id and godown_id populated
+# Stock adjust - all required
+@mcp.tool()
+async def adjust_stock(
+    variant_id: int,
+    tone_id: int,             # REQUIRED
+    godown_id: int,           # REQUIRED
+    qty: float,               # Can be positive or negative
+    uom: Literal["m", "roll"],
+    reason: str               # REQUIRED for adjustments
+) -> dict:
+    """Adjust stock (corrections). Both tone_id and godown_id required."""
 ```
 
 ---
@@ -459,9 +443,9 @@ POST /receive {"variant_id": 991, "qty": 100, "uom": "m"}
 ### Step 1: Database Changes
 - [ ] Add godowns table and schema
 - [ ] Add tones table and schema
-- [ ] Add columns to stock_movements
-- [ ] Create stock_balances_v2 table
-- [ ] Write migration scripts
+- [ ] Recreate stock_movements with new schema
+- [ ] Recreate stock_balances with composite key
+- [ ] Seed default godown
 
 ### Step 2: Repository Layer
 - [ ] Add godown CRUD functions
@@ -489,10 +473,13 @@ POST /receive {"variant_id": 991, "qty": 100, "uom": "m"}
 - [ ] Update stock movement tools
 - [ ] Add transfer tool
 
-### Step 6: Migration
-- [ ] Create default godown
-- [ ] Migrate existing balances
-- [ ] Update existing movements (optional backfill)
+### Step 6: Testing
+- [ ] Test godown CRUD operations
+- [ ] Test tone CRUD operations
+- [ ] Test receive with new/existing tone
+- [ ] Test issue requires tone_id and godown_id
+- [ ] Test transfer between godowns
+- [ ] Test negative stock prevention
 
 ---
 
@@ -500,46 +487,27 @@ POST /receive {"variant_id": 991, "qty": 100, "uom": "m"}
 
 ### 1. Tone Validation
 - Cannot issue from a tone with insufficient stock
-- Cannot issue mixing tones (exactly one tone_id per issue)
 - Tone suffix must be unique per variant
+- Must provide either `tone_id` or `new_tone_suffix` on receive
 
 ### 2. Godown Validation
-- Cannot delete godown with stock (use RESTRICT)
+- Cannot delete godown with stock (FK RESTRICT)
 - Exactly one default godown must exist
 - Cannot transfer to same godown
 
-### 3. Stock Negative Prevention (Optional)
-```sql
--- Add check constraint
-ALTER TABLE stock_balances_v2
-ADD CONSTRAINT chk_non_negative CHECK (on_hand_m >= 0);
-```
+### 3. Stock Validation
+- Negative stock prevented by CHECK constraint
+- Issue fails if balance insufficient
 
 ---
 
 ## Questions for Clarification
 
-1. **Tone Suffix Format**: Should suffixes be single letters (A, B, C), numbers (01, 02), or flexible?
+1. **Tone Suffix Format**: Should suffixes be single letters (A, B, C), numbers (01, 02), or flexible (user decides)?
 
-2. **Auto-tone on Receipt**: When receiving new stock, should the system:
-   - Require explicit tone specification?
-   - Auto-create new tone with next letter?
-   - Prompt user for tone choice?
-
-3. **Godown Requirement**: Should godown_id be:
-   - Optional (uses default)?
-   - Required on all operations?
-   - Required only when multiple godowns exist?
-
-4. **Legacy Data**: How should pre-migration stock be treated:
-   - Create "LEGACY" tone for each?
-   - Create "UNSPECIFIED" tone?
-   - Require manual assignment?
-
-5. **Transfer Tracking**: Should transfers between godowns be:
-   - Single TRANSFER movement type?
-   - Pair of ISSUE + RECEIPT movements?
-   - Separate transfer log table?
+2. **Transfer Tracking**: Should transfers between godowns be:
+   - Single TRANSFER movement type with `transfer_to_godown_id`?
+   - Pair of ISSUE + RECEIPT movements linked by `document_id`?
 
 ---
 
@@ -549,7 +517,11 @@ This plan introduces:
 1. **Tones** - Sub-division of variants for batch/dye lot tracking
 2. **Godowns** - Warehouse location tracking with default support
 3. **Enhanced Stock Model** - Stock tracked at `(variant, tone, godown)` level
-4. **Business Rule Enforcement** - Issues require single tone to prevent mixing
-5. **Backward Compatibility** - Existing API calls continue to work
+4. **Business Rule Enforcement** - All movements require `tone_id` and `godown_id`
+5. **Negative Stock Prevention** - CHECK constraint prevents overselling
 
-The design maintains the current system's simplicity while adding the necessary granularity for real-world textile inventory management.
+**Breaking Changes:**
+- `stock_balances` table recreated with composite PK `(variant_id, tone_id, godown_id)`
+- `stock_movements` table recreated with required `tone_id` and `godown_id`
+- All movement APIs require `tone_id` and `godown_id` parameters
+- Historical data not preserved (clean slate migration)
