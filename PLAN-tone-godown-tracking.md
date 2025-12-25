@@ -55,7 +55,7 @@ ON godowns (is_default) WHERE is_default = TRUE;
 CREATE TABLE IF NOT EXISTS tones (
     id          BIGSERIAL PRIMARY KEY,
     variant_id  BIGINT NOT NULL REFERENCES fabric_variants(id) ON DELETE CASCADE,
-    suffix      TEXT NOT NULL,               -- e.g., "A", "B", "C" or "01", "02"
+    suffix      CHAR(1) NOT NULL CHECK (suffix ~ '^[A-Z]$'),  -- Single uppercase letter: A, B, C...
     description TEXT,                        -- Optional: "Slightly darker", "Feb 2024 batch"
     received_at TIMESTAMPTZ DEFAULT now(),   -- When this tone was first received
     is_active   BOOLEAN DEFAULT TRUE,        -- Soft delete for depleted tones
@@ -175,15 +175,24 @@ Variant: 991 (Cotton Jersey, Red, 180gsm, 60")
 - ISSUE - Stock out
 - ADJUST - Corrections
 
-### New Movement Type (Optional)
-- **TRANSFER** - Move stock between godowns
+### New Movement Type
+- **TRANSFER** - Move stock between godowns (single movement record)
 
 ```sql
--- Transfer movement example: Move 100m from Godown 1 to Godown 2
--- Creates TWO movements:
--- 1. TRANSFER (negative) from source godown
--- 2. TRANSFER (positive) to destination godown
--- Both linked by document_id for traceability
+-- Transfer example: Move 100m of variant 991, tone A from Godown 1 to Godown 2
+INSERT INTO stock_movements (
+    variant_id, tone_id, godown_id, movement_type,
+    delta_qty_m, original_qty, original_uom,
+    transfer_to_godown_id
+) VALUES (
+    991, 1, 1, 'TRANSFER',    -- from godown_id=1
+    -100.0, 100.0, 'm',
+    2                          -- to godown_id=2
+);
+
+-- System then updates BOTH balances:
+-- 1. Decrease stock_balances WHERE godown_id=1 by 100m
+-- 2. Increase stock_balances WHERE godown_id=2 by 100m (upsert)
 ```
 
 ---
@@ -501,13 +510,16 @@ async def adjust_stock(
 
 ---
 
-## Questions for Clarification
+## Design Decisions
 
-1. **Tone Suffix Format**: Should suffixes be single letters (A, B, C), numbers (01, 02), or flexible (user decides)?
+1. **Tone Suffix Format**: Single uppercase letter (A, B, C, ... Z)
+   - Enforced via CHECK constraint: `suffix ~ '^[A-Z]$'`
+   - Max 26 tones per variant (sufficient for practical use)
 
-2. **Transfer Tracking**: Should transfers between godowns be:
-   - Single TRANSFER movement type with `transfer_to_godown_id`?
-   - Pair of ISSUE + RECEIPT movements linked by `document_id`?
+2. **Transfer Tracking**: Single TRANSFER movement type
+   - Uses `transfer_to_godown_id` for destination
+   - Single record with negative `delta_qty_m` from source godown
+   - Balance updated in both source (decrease) and destination (increase)
 
 ---
 
