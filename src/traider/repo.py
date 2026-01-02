@@ -145,9 +145,9 @@ def search_fabrics(
 def create_variant(
     fabric_id: int,
     color_code: str,
-    gsm: int,
-    width: int,
     finish: str,
+    gsm: Optional[int] = None,
+    width: Optional[int] = None,
     image_url: Optional[str] = None,
     gallery: Optional[dict] = None
 ) -> Optional[dict]:

@@ -28,9 +28,9 @@ CREATE TABLE IF NOT EXISTS fabric_variants (
   id BIGSERIAL PRIMARY KEY,
   fabric_id BIGINT NOT NULL REFERENCES fabrics(id) ON DELETE CASCADE,
   color_code TEXT NOT NULL,
-  gsm INT NOT NULL,
-  width INT NOT NULL,
   finish TEXT NOT NULL,
+  gsm INT,
+  width INT,
   image_url TEXT,
   UNIQUE (fabric_id, color_code, gsm, width, finish)
 );

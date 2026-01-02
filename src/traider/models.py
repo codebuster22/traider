@@ -52,9 +52,9 @@ class FabricUpdate(BaseModel):
 class VariantCreate(BaseModel):
     fabric_id: int
     color_code: str
-    gsm: int
-    width: int
     finish: str
+    gsm: Optional[int] = None
+    width: Optional[int] = None
     image_url: Optional[str] = None
     image_data: Optional[str] = None
     gallery: Gallery = Field(default_factory=dict)
@@ -64,9 +64,9 @@ class Variant(BaseModel):
     id: int
     fabric_id: int
     color_code: str
-    gsm: int
-    width: int
     finish: str
+    gsm: Optional[int] = None
+    width: Optional[int] = None
     image_url: Optional[str] = None
     gallery: Gallery = Field(default_factory=dict)
 
@@ -90,9 +90,9 @@ class VariantDetail(BaseModel):
     fabric_image_url: Optional[str] = None
     fabric_gallery: Gallery = Field(default_factory=dict)
     color_code: str
-    gsm: int
-    width: int
     finish: str
+    gsm: Optional[int] = None
+    width: Optional[int] = None
     variant_image_url: Optional[str] = None
     variant_gallery: Gallery = Field(default_factory=dict)
 
@@ -136,9 +136,9 @@ class StockBalance(BaseModel):
     fabric_image_url: Optional[str] = None
     fabric_gallery: Gallery = Field(default_factory=dict)
     color_code: str
-    gsm: int
-    width: int
     finish: str
+    gsm: Optional[int] = None
+    width: Optional[int] = None
     variant_image_url: Optional[str] = None
     variant_gallery: Gallery = Field(default_factory=dict)
 
@@ -169,9 +169,9 @@ class VariantSearchItem(BaseModel):
     fabric_image_url: Optional[str] = None
     fabric_gallery: Gallery = Field(default_factory=dict)
     color_code: str
-    gsm: int
-    width: int
     finish: str
+    gsm: Optional[int] = None
+    width: Optional[int] = None
     variant_image_url: Optional[str] = None
     variant_gallery: Gallery = Field(default_factory=dict)
 

@@ -55,9 +55,9 @@ class SearchFabricsInput(BaseModel):
 class CreateVariantInput(BaseModel):
     fabric_id: int = Field(description="ID of the parent fabric")
     color_code: str = Field(description="Color code (e.g., 'BLK-9001')")
-    gsm: int = Field(description="Grams per square meter")
-    width: int = Field(description="Width in inches")
     finish: str = Field(description="Finish type (e.g., 'Bio', 'Enzyme')")
+    gsm: Optional[int] = Field(None, description="Grams per square meter (optional)")
+    width: Optional[int] = Field(None, description="Width in inches (optional)")
     image_url: Optional[str] = Field(None, description="Optional image URL (if already uploaded)")
     image_data: Optional[str] = Field(None, description="Optional base64 image data to upload")
     gallery: dict = Field(default_factory=dict, description="Gallery with photoshoot namespaces, each having 'main' and 'images' array")
