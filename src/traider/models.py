@@ -28,6 +28,7 @@ class FabricCreate(BaseModel):
     image_url: Optional[str] = None
     image_data: Optional[str] = None
     gallery: Gallery = Field(default_factory=dict)
+    aliases: list[str] = Field(default_factory=list)
 
 
 class Fabric(BaseModel):
@@ -36,6 +37,7 @@ class Fabric(BaseModel):
     name: str
     image_url: Optional[str] = None
     gallery: Gallery = Field(default_factory=dict)
+    aliases: list[str] = Field(default_factory=list)
 
 
 class FabricUpdate(BaseModel):
@@ -46,13 +48,20 @@ class FabricUpdate(BaseModel):
 
 
 # ============================================================================
+# Aliases
+# ============================================================================
+
+class AliasCreate(BaseModel):
+    alias: str
+
+
+# ============================================================================
 # Variants
 # ============================================================================
 
 class VariantCreate(BaseModel):
-    fabric_id: int
     color_code: str
-    finish: str
+    finish: str = "Standard"
     gsm: Optional[int] = None
     width: Optional[int] = None
     image_url: Optional[str] = None
@@ -102,7 +111,8 @@ class VariantDetail(BaseModel):
 # ============================================================================
 
 class MovementCreate(BaseModel):
-    variant_id: int
+    fabric_code: str
+    color_code: str
     qty: float
     uom: Literal["m", "roll"]
     roll_count: Optional[int] = None
@@ -186,3 +196,146 @@ class VariantSearchResult(BaseModel):
     limit: int
     offset: int
     total: int
+
+
+# ============================================================================
+# Unified Search
+# ============================================================================
+
+class FabricSearchItem(BaseModel):
+    """Fabric search result with match info."""
+    fabric_code: str
+    name: str
+    aliases: list[str] = Field(default_factory=list)
+    image_url: Optional[str] = None
+    gallery: Gallery = Field(default_factory=dict)
+    match_source: str  # "name", "fabric_code", or "alias"
+
+
+class UnifiedSearchResult(BaseModel):
+    """Combined search results for fabrics and variants."""
+    fabrics: list[FabricSearchItem] = Field(default_factory=list)
+    variants: list[VariantSearchItem] = Field(default_factory=list)
+
+
+# ============================================================================
+# Batch Operations
+# ============================================================================
+
+# --- Batch Variant Creation ---
+
+class VariantBatchItem(BaseModel):
+    """Single variant item for batch creation."""
+    color_code: str
+    finish: str = "Standard"
+    gsm: Optional[int] = None
+    width: Optional[int] = None
+
+
+class VariantBatchRequest(BaseModel):
+    """Request for batch variant creation."""
+    variants: list[VariantBatchItem]
+
+
+class VariantBatchCreatedItem(BaseModel):
+    """Successfully created variant in batch response."""
+    fabric_code: str
+    color_code: str
+    finish: str
+
+
+class VariantBatchFailedItem(BaseModel):
+    """Failed variant in batch response."""
+    color_code: str
+    error: str
+
+
+class BatchSummary(BaseModel):
+    """Summary statistics for batch operations."""
+    total: int
+    created: int = 0
+    processed: int = 0
+    failed: int
+    found: int = 0
+    not_found: int = 0
+
+
+class VariantBatchResponse(BaseModel):
+    """Response for batch variant creation."""
+    created: list[VariantBatchCreatedItem]
+    failed: list[VariantBatchFailedItem]
+    summary: BatchSummary
+
+
+# --- Batch Stock Movements ---
+
+class MovementBatchItem(BaseModel):
+    """Single movement item for batch stock operations."""
+    fabric_code: str
+    color_code: str
+    qty: float
+    uom: Literal["m", "roll"]
+    roll_count: Optional[int] = None
+
+
+class MovementBatchRequest(BaseModel):
+    """Request for batch stock movements."""
+    items: list[MovementBatchItem]
+    document_id: Optional[str] = None
+    reason: Optional[str] = None
+    customer_name: Optional[str] = None  # For issue
+
+
+class MovementBatchProcessedItem(BaseModel):
+    """Successfully processed movement in batch response."""
+    fabric_code: str
+    color_code: str
+    qty: float
+    previous_balance: float
+    new_balance: float
+    movement_id: int
+
+
+class MovementBatchFailedItem(BaseModel):
+    """Failed movement in batch response."""
+    fabric_code: str
+    color_code: str
+    qty: float
+    error: str
+
+
+class MovementBatchSummary(BaseModel):
+    """Summary statistics for batch movement operations."""
+    total: int
+    processed: int
+    failed: int
+    total_qty: float = 0
+
+
+class MovementBatchResponse(BaseModel):
+    """Response for batch stock movements."""
+    processed: list[MovementBatchProcessedItem]
+    failed: list[MovementBatchFailedItem]
+    summary: MovementBatchSummary
+
+
+# --- Batch Variant Search ---
+
+class VariantSearchBatchRequest(BaseModel):
+    """Request for batch variant search."""
+    color_codes: list[str]
+    include_stock: bool = False
+
+
+class VariantSearchBatchFoundItem(BaseModel):
+    """Found variant in batch search response."""
+    color_code: str
+    variant: VariantSearchItem
+    stock: Optional[dict] = None
+
+
+class VariantSearchBatchResponse(BaseModel):
+    """Response for batch variant search."""
+    found: list[VariantSearchBatchFoundItem]
+    not_found: list[str]
+    summary: BatchSummary

@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from traider.db import init_db, close_db
-from traider.routes import fabrics, variants, movements, stock
+from traider.routes import fabrics, variants, movements, stock, search
 from traider.routes.mcp import mcp_asgi_app, startup_mcp, shutdown_mcp
 
 
@@ -43,8 +43,10 @@ _app.add_middleware(
 # Register routers
 _app.include_router(fabrics.router)
 _app.include_router(variants.router)
+_app.include_router(variants.nested_router)  # Nested variant routes under /fabrics
 _app.include_router(movements.router)
 _app.include_router(stock.router)
+_app.include_router(search.router)
 
 
 @_app.get("/")

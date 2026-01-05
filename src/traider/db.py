@@ -24,15 +24,21 @@ CREATE TABLE IF NOT EXISTS fabrics (
   image_url TEXT
 );
 
+CREATE TABLE IF NOT EXISTS fabric_aliases (
+  fabric_id BIGINT NOT NULL REFERENCES fabrics(id) ON DELETE CASCADE,
+  alias TEXT NOT NULL,
+  PRIMARY KEY (fabric_id, alias)
+);
+
 CREATE TABLE IF NOT EXISTS fabric_variants (
   id BIGSERIAL PRIMARY KEY,
   fabric_id BIGINT NOT NULL REFERENCES fabrics(id) ON DELETE CASCADE,
   color_code TEXT NOT NULL,
-  finish TEXT NOT NULL,
+  finish TEXT NOT NULL DEFAULT 'Standard',
   gsm INT,
   width INT,
   image_url TEXT,
-  UNIQUE (fabric_id, color_code, gsm, width, finish)
+  UNIQUE (fabric_id, color_code)
 );
 
 -- Source of truth for changes (always meters)
@@ -60,8 +66,10 @@ CREATE INDEX IF NOT EXISTS idx_fabrics_code_trgm
   ON fabrics USING gin (fabric_code gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_fabrics_name_trgm
   ON fabrics USING gin (name gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS idx_variants_fabric_keys
-  ON fabric_variants (fabric_id, color_code, gsm, width, finish);
+CREATE INDEX IF NOT EXISTS idx_fabric_aliases_trgm
+  ON fabric_aliases USING gin (alias gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_variants_fabric_color
+  ON fabric_variants (fabric_id, color_code);
 CREATE INDEX IF NOT EXISTS idx_variants_color_trgm
   ON fabric_variants USING gin (color_code gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_variants_finish_trgm

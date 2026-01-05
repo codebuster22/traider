@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from psycopg import errors as pg_errors
 
-from traider.models import FabricCreate, FabricUpdate, Fabric, FabricSearchResult
+from traider.models import FabricCreate, FabricUpdate, Fabric, FabricSearchResult, AliasCreate
 from traider import repo
 from traider.cloudinary_utils import upload_image as cloudinary_upload
 
@@ -12,7 +12,7 @@ router = APIRouter(prefix="/fabrics", tags=["fabrics"])
 
 @router.post("", response_model=Fabric, status_code=201)
 def create_fabric(fabric: FabricCreate):
-    """Create a new fabric."""
+    """Create a new fabric with optional aliases."""
     try:
         # Handle inline image upload
         image_url = fabric.image_url
@@ -31,11 +31,21 @@ def create_fabric(fabric: FabricCreate):
             fabric_code=fabric.fabric_code,
             name=fabric.name,
             image_url=image_url,
-            gallery=fabric.gallery
+            gallery=fabric.gallery,
+            aliases=fabric.aliases
         )
         return result
     except pg_errors.UniqueViolation:
         raise HTTPException(status_code=400, detail=f"Fabric code '{fabric.fabric_code}' already exists")
+
+
+@router.get("/{fabric_code}", response_model=Fabric)
+def get_fabric(fabric_code: str):
+    """Get a fabric by its fabric_code."""
+    result = repo.get_fabric_by_code(fabric_code)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Fabric '{fabric_code}' not found")
+    return result
 
 
 @router.put("/{fabric_id}", response_model=Fabric)
@@ -92,3 +102,42 @@ def search_fabrics(
         "offset": offset,
         "total": total
     }
+
+
+# ============================================================================
+# Alias Management
+# ============================================================================
+
+@router.get("/{fabric_code}/aliases", response_model=list[str])
+def get_aliases(fabric_code: str):
+    """Get all aliases for a fabric."""
+    fabric = repo.get_fabric_by_code(fabric_code)
+    if fabric is None:
+        raise HTTPException(status_code=404, detail=f"Fabric '{fabric_code}' not found")
+    return repo.get_fabric_aliases(fabric["id"])
+
+
+@router.post("/{fabric_code}/aliases", status_code=201)
+def add_alias(fabric_code: str, body: AliasCreate):
+    """Add an alias to a fabric."""
+    fabric = repo.get_fabric_by_code(fabric_code)
+    if fabric is None:
+        raise HTTPException(status_code=404, detail=f"Fabric '{fabric_code}' not found")
+
+    added = repo.add_fabric_alias(fabric["id"], body.alias)
+    if not added:
+        raise HTTPException(status_code=409, detail=f"Alias '{body.alias}' already exists for this fabric")
+    return {"message": f"Alias '{body.alias}' added successfully"}
+
+
+@router.delete("/{fabric_code}/aliases/{alias}", status_code=200)
+def remove_alias(fabric_code: str, alias: str):
+    """Remove an alias from a fabric."""
+    fabric = repo.get_fabric_by_code(fabric_code)
+    if fabric is None:
+        raise HTTPException(status_code=404, detail=f"Fabric '{fabric_code}' not found")
+
+    removed = repo.remove_fabric_alias(fabric["id"], alias)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"Alias '{alias}' not found for this fabric")
+    return {"message": f"Alias '{alias}' removed successfully"}
