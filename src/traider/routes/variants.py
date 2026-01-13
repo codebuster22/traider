@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from traider.models import (
     VariantCreate, VariantUpdate, Variant, VariantDetail, VariantSearchResult,
     VariantBatchRequest, VariantBatchResponse, VariantSearchBatchRequest, VariantSearchBatchResponse,
-    VariantSearchItem
+    VariantSearchItem, MessageResponse
 )
 from traider import repo
 from traider.cloudinary_utils import upload_image as cloudinary_upload
@@ -138,7 +138,7 @@ def update_variant_by_codes(fabric_code: str, color_code: str, variant: VariantU
     return repo.get_variant_by_codes(fabric_code, final_color)
 
 
-@nested_router.delete("/fabrics/{fabric_code}/variants/{color_code}", status_code=200)
+@nested_router.delete("/fabrics/{fabric_code}/variants/{color_code}", response_model=MessageResponse, status_code=200)
 def delete_variant_by_codes(fabric_code: str, color_code: str):
     """Delete a variant by fabric_code and color_code."""
     deleted = repo.delete_variant_by_codes(fabric_code, color_code)
@@ -147,7 +147,7 @@ def delete_variant_by_codes(fabric_code: str, color_code: str):
             status_code=404,
             detail=f"Variant '{color_code}' not found for fabric '{fabric_code}'"
         )
-    return {"message": f"Variant '{color_code}' deleted from fabric '{fabric_code}'"}
+    return MessageResponse(message=f"Variant '{color_code}' deleted from fabric '{fabric_code}'")
 
 
 # ============================================================================

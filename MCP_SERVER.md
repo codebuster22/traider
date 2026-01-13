@@ -21,75 +21,170 @@ For production, you may want to add authentication middleware.
 
 ## Available Tools
 
-The MCP server exposes the following tools:
+The MCP server exposes **22 tools** organized by category. All tools use business identifiers (fabric_code, color_code) rather than internal IDs.
 
-### Master Data Tools
+### Image Upload Tools
 
-1. **create_fabric** - Create a new fabric
-   - `fabric_code` (string): Unique fabric code
+1. **upload_image** - Upload an image to Cloudinary
+   - `image_data` (string): Base64 encoded image data
+   - `filename` (string, optional): Filename without extension
+   - `folder` (string): Cloudinary folder path (default: "traider")
+
+### Fabric Management Tools
+
+2. **create_fabric** - Create a new fabric with optional aliases
+   - `fabric_code` (string): Unique fabric code (e.g., 'FAB-001')
    - `name` (string): Fabric name
-   - `image_url` (string, optional): Image URL
+   - `image_url` (string, optional): Image URL if already uploaded
+   - `image_data` (string, optional): Base64 image data to upload
+   - `gallery` (dict, optional): Gallery with photoshoot namespaces
+   - `aliases` (list[string], optional): Alternative names for the fabric
 
-2. **search_fabrics** - Search fabrics with filters
-   - `q` (string, optional): Free text search
-   - `fabric_code` (string, optional): Filter by code
-   - `name` (string, optional): Filter by name
-   - `limit` (int): Max results (default: 20)
+3. **update_fabric** - Update an existing fabric
+   - `fabric_code` (string): Fabric code to update
+   - `name` (string, optional): New fabric name
+   - `image_url` (string, optional): New image URL
+   - `image_data` (string, optional): Base64 image data to upload
+   - `gallery` (dict, optional): New gallery data
+
+4. **get_fabric** - Get a fabric by its fabric_code
+   - `fabric_code` (string): Fabric code to retrieve
+
+5. **search_fabrics** - Search fabrics with filters and pagination
+   - `q` (string, optional): Free text search across fabric_code, name, and aliases
+   - `fabric_code` (string, optional): Filter by fabric code (partial match)
+   - `name` (string, optional): Filter by name (partial match)
+   - `limit` (int): Max results (default: 20, max: 100)
    - `offset` (int): Skip results (default: 0)
 
-3. **create_variant** - Create a new fabric variant
-   - `fabric_id` (int): Parent fabric ID
-   - `color_code` (string): Color code
-   - `gsm` (int): Grams per square meter
-   - `width` (int): Width in inches
-   - `finish` (string): Finish type
+### Alias Management Tools
+
+6. **add_alias** - Add an alternative name to a fabric
+   - `fabric_code` (string): Fabric code to add alias to
+   - `alias` (string): Alias to add
+
+7. **remove_alias** - Remove an alias from a fabric
+   - `fabric_code` (string): Fabric code to remove alias from
+   - `alias` (string): Alias to remove
+
+8. **get_aliases** - Get all aliases for a fabric
+   - `fabric_code` (string): Fabric code to get aliases for
+
+### Variant Management Tools
+
+9. **create_variant** - Create a new fabric variant
+   - `fabric_code` (string): Fabric code of the parent fabric
+   - `color_code` (string): Color code (e.g., 'BLK-9001')
+   - `finish` (string): Finish type (default: "Standard")
+   - `gsm` (int, optional): Grams per square meter
+   - `width` (int, optional): Width in inches
    - `image_url` (string, optional): Image URL
+   - `image_data` (string, optional): Base64 image data to upload
+   - `gallery` (dict, optional): Gallery with photoshoot namespaces
 
-4. **get_variant** - Get variant details by ID
-   - `variant_id` (int): Variant ID
+10. **update_variant** - Update an existing variant
+    - `fabric_code` (string): Fabric code of the variant
+    - `color_code` (string): Color code to update
+    - `new_color_code` (string, optional): New color code if renaming
+    - `gsm` (int, optional): New GSM value
+    - `width` (int, optional): New width in inches
+    - `finish` (string, optional): New finish type
+    - `image_url` (string, optional): New image URL
+    - `image_data` (string, optional): Base64 image data to upload
+    - `gallery` (dict, optional): New gallery data
 
-5. **search_variants** - Search variants with filters
-   - `q` (string, optional): Free text search
-   - `fabric_id` (int, optional): Filter by fabric ID
-   - `fabric_code` (string, optional): Filter by fabric code
-   - `color_code` (string, optional): Filter by color code
-   - `gsm` (int, optional): Exact GSM
-   - `gsm_min` (int, optional): Minimum GSM
-   - `gsm_max` (int, optional): Maximum GSM
-   - `include_stock` (bool): Include stock info (default: false)
-   - `in_stock_only` (bool): Only variants with stock (default: false)
-   - `limit` (int): Max results (default: 20)
-   - `offset` (int): Skip results (default: 0)
+11. **get_variant** - Get variant details
+    - `fabric_code` (string): Fabric code
+    - `color_code` (string): Color code
+
+12. **delete_variant** - Delete a variant
+    - `fabric_code` (string): Fabric code
+    - `color_code` (string): Color code to delete
+
+13. **search_variants** - Search variants with filters, stock info, and pagination
+    - `q` (string, optional): Free text search
+    - `fabric_code` (string, optional): Filter by fabric code
+    - `color_code` (string, optional): Filter by color code
+    - `gsm` (int, optional): Exact GSM filter
+    - `gsm_min` (int, optional): Minimum GSM
+    - `gsm_max` (int, optional): Maximum GSM
+    - `width` (int, optional): Exact width filter
+    - `width_min` (int, optional): Minimum width
+    - `width_max` (int, optional): Maximum width
+    - `finish` (string, optional): Filter by finish type (partial match)
+    - `include_stock` (bool): Include stock information (default: false)
+    - `in_stock_only` (bool): Only variants with stock > 0 (default: false)
+    - `limit` (int): Max results (default: 20, max: 100)
+    - `offset` (int): Skip results (default: 0)
+    - `sort_by` (string): Sort field: id, fabric_code, color_code, gsm, width (default: "color_code")
+    - `sort_dir` (string): Sort direction: asc or desc (default: "asc")
 
 ### Stock Movement Tools
 
-6. **receive_stock** - Record stock receipt (increases inventory)
-   - `variant_id` (int): Variant ID
-   - `qty` (float): Quantity to receive
-   - `uom` (string): Unit ("m" or "roll")
-   - `reason` (string, optional): Free-text reason
+14. **receive_stock** - Record stock receipt (increases inventory)
+    - `fabric_code` (string): Fabric code
+    - `color_code` (string): Color code
+    - `qty` (float): Quantity in meters
+    - `uom` (string): Unit of measure (default: "m")
+    - `roll_count` (int, optional): Number of rolls
+    - `document_id` (string, optional): Invoice/receipt ID
+    - `reason` (string, optional): Free-text reason
 
-7. **issue_stock** - Record stock issue/consumption (decreases inventory)
-   - `variant_id` (int): Variant ID
-   - `qty` (float): Quantity to issue
-   - `uom` (string): Unit ("m" or "roll")
-   - `reason` (string, optional): Free-text reason
+15. **issue_stock** - Record stock issue (decreases inventory)
+    - `fabric_code` (string): Fabric code
+    - `color_code` (string): Color code
+    - `qty` (float): Quantity in meters (automatically negated)
+    - `uom` (string): Unit of measure (default: "m")
+    - `roll_count` (int, optional): Number of rolls
+    - `document_id` (string, optional): Invoice/receipt ID
+    - `reason` (string, optional): Free-text reason
 
-8. **adjust_stock** - Record stock adjustment (can be +/-)
-   - `variant_id` (int): Variant ID
-   - `qty` (float): Adjustment quantity
-   - `uom` (string): Unit ("m" or "roll")
-   - `reason` (string, optional): Free-text reason
+16. **adjust_stock** - Record stock adjustment (can be +/-)
+    - `fabric_code` (string): Fabric code
+    - `color_code` (string): Color code
+    - `qty` (float): Adjustment quantity (positive or negative)
+    - `uom` (string): Unit of measure (default: "m")
+    - `roll_count` (int, optional): Number of rolls
+    - `document_id` (string, optional): Invoice/receipt ID
+    - `reason` (string, optional): Free-text reason
 
 ### Stock Query Tools
 
-9. **get_stock** - Get current stock balance for a variant
-   - `variant_id` (int): Variant ID
-   - `uom` (string): Display unit ("m" or "roll", default: "m")
-
-10. **get_stock_batch** - Get stock for multiple variants
-    - `variant_ids` (list[int]): List of variant IDs
+17. **get_stock** - Get current stock balance
+    - `fabric_code` (string): Fabric code
+    - `color_code` (string): Color code
     - `uom` (string): Display unit ("m" or "roll", default: "m")
+
+### Search Tools
+
+18. **unified_search** - Search across fabrics and variants in one call
+    - `q` (string): Search query
+    - `include_fabrics` (bool): Include fabrics (default: true)
+    - `include_variants` (bool): Include variants (default: true)
+    - `include_stock` (bool): Include stock info for variants (default: false)
+    - `limit` (int): Max results per category (default: 20, max: 100)
+
+### Batch Operations
+
+19. **create_variants_batch** - Create multiple variants at once (max 100)
+    - `fabric_code` (string): Fabric code to create variants under
+    - `variants` (list): List of variant objects with color_code, finish, gsm, width
+
+20. **receive_stock_batch** - Record stock inflow for multiple variants (max 50)
+    - `items` (list): List of items with fabric_code, color_code, qty, uom, roll_count
+    - `document_id` (string, optional): Document/invoice ID
+    - `reason` (string, optional): Reason for receipt
+
+21. **issue_stock_batch** - Record stock outflow for multiple variants (max 50)
+    - `items` (list): List of items with fabric_code, color_code, qty, uom, roll_count
+    - `document_id` (string, optional): Document/invoice ID
+    - `customer_name` (string, optional): Customer name
+    - `reason` (string, optional): Reason for issue
+
+22. **search_variants_batch** - Search multiple variants by color codes
+    - `fabric_code` (string): Fabric code to search within
+    - `color_codes` (list[string]): List of color codes to find
+    - `include_stock` (bool): Include stock balances (default: false)
 
 ## Installation
 

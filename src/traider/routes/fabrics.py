@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from psycopg import errors as pg_errors
 
-from traider.models import FabricCreate, FabricUpdate, Fabric, FabricSearchResult, AliasCreate
+from traider.models import FabricCreate, FabricUpdate, Fabric, FabricSearchResult, AliasCreate, MessageResponse
 from traider import repo
 from traider.cloudinary_utils import upload_image as cloudinary_upload
 
@@ -48,9 +48,14 @@ def get_fabric(fabric_code: str):
     return result
 
 
-@router.put("/{fabric_id}", response_model=Fabric)
-def update_fabric(fabric_id: int, fabric: FabricUpdate):
-    """Update an existing fabric."""
+@router.put("/{fabric_code}", response_model=Fabric)
+def update_fabric(fabric_code: str, fabric: FabricUpdate):
+    """Update an existing fabric by fabric_code."""
+    # Look up fabric by code first
+    existing = repo.get_fabric_by_code(fabric_code)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"Fabric '{fabric_code}' not found")
+
     # Handle inline image upload
     image_url = fabric.image_url
     if fabric.image_data:
@@ -58,20 +63,18 @@ def update_fabric(fabric_id: int, fabric: FabricUpdate):
             upload_result = cloudinary_upload(
                 image_data=fabric.image_data,
                 folder="traider/fabrics",
-                filename=f"fabric_{fabric_id}"
+                filename=fabric_code
             )
             image_url = upload_result['secure_url']
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Image upload failed: {str(e)}")
 
     result = repo.update_fabric(
-        fabric_id=fabric_id,
+        fabric_id=existing["id"],
         name=fabric.name,
         image_url=image_url,
         gallery=fabric.gallery
     )
-    if result is None:
-        raise HTTPException(status_code=404, detail=f"Fabric with id {fabric_id} not found")
     return result
 
 
@@ -117,7 +120,7 @@ def get_aliases(fabric_code: str):
     return repo.get_fabric_aliases(fabric["id"])
 
 
-@router.post("/{fabric_code}/aliases", status_code=201)
+@router.post("/{fabric_code}/aliases", response_model=MessageResponse, status_code=201)
 def add_alias(fabric_code: str, body: AliasCreate):
     """Add an alias to a fabric."""
     fabric = repo.get_fabric_by_code(fabric_code)
@@ -127,10 +130,10 @@ def add_alias(fabric_code: str, body: AliasCreate):
     added = repo.add_fabric_alias(fabric["id"], body.alias)
     if not added:
         raise HTTPException(status_code=409, detail=f"Alias '{body.alias}' already exists for this fabric")
-    return {"message": f"Alias '{body.alias}' added successfully"}
+    return MessageResponse(message=f"Alias '{body.alias}' added successfully")
 
 
-@router.delete("/{fabric_code}/aliases/{alias}", status_code=200)
+@router.delete("/{fabric_code}/aliases/{alias}", response_model=MessageResponse, status_code=200)
 def remove_alias(fabric_code: str, alias: str):
     """Remove an alias from a fabric."""
     fabric = repo.get_fabric_by_code(fabric_code)
@@ -140,4 +143,4 @@ def remove_alias(fabric_code: str, alias: str):
     removed = repo.remove_fabric_alias(fabric["id"], alias)
     if not removed:
         raise HTTPException(status_code=404, detail=f"Alias '{alias}' not found for this fabric")
-    return {"message": f"Alias '{alias}' removed successfully"}
+    return MessageResponse(message=f"Alias '{alias}' removed successfully")

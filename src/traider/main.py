@@ -5,8 +5,38 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from traider.db import init_db, close_db
-from traider.routes import fabrics, variants, movements, stock, search
+from traider.models import HealthResponse
+from traider.routes import fabrics, variants, movements, stock, search, images
 from traider.routes.mcp import mcp_asgi_app, startup_mcp, shutdown_mcp
+
+
+# OpenAPI tag descriptions for /docs
+openapi_tags = [
+    {
+        "name": "fabrics",
+        "description": "Master data management for fabric definitions and aliases",
+    },
+    {
+        "name": "variants",
+        "description": "Fabric variant management with color codes and specifications",
+    },
+    {
+        "name": "movements",
+        "description": "Stock movement recording (receipts, issues, adjustments)",
+    },
+    {
+        "name": "stock",
+        "description": "Stock balance queries and inventory status",
+    },
+    {
+        "name": "search",
+        "description": "Unified search across fabrics and variants",
+    },
+    {
+        "name": "images",
+        "description": "Image upload and management via Cloudinary",
+    },
+]
 
 
 @asynccontextmanager
@@ -26,7 +56,8 @@ _app = FastAPI(
     title="Fabric Inventory Service",
     description="Dead-simple fabric stock tracking service",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    openapi_tags=openapi_tags
 )
 
 
@@ -47,12 +78,13 @@ _app.include_router(variants.nested_router)  # Nested variant routes under /fabr
 _app.include_router(movements.router)
 _app.include_router(stock.router)
 _app.include_router(search.router)
+_app.include_router(images.router)
 
 
-@_app.get("/")
+@_app.get("/", response_model=HealthResponse)
 def root():
     """Health check endpoint."""
-    return {"status": "ok", "service": "fabric-inventory"}
+    return HealthResponse(status="ok", service="fabric-inventory")
 
 
 @_app.exception_handler(Exception)

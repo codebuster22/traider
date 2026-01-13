@@ -339,3 +339,25 @@ class VariantSearchBatchResponse(BaseModel):
     found: list[VariantSearchBatchFoundItem]
     not_found: list[str]
     summary: BatchSummary
+
+
+# ============================================================================
+# Utility Responses
+# ============================================================================
+
+class MessageResponse(BaseModel):
+    """Generic message response for simple operations."""
+    message: str
+
+
+class HealthResponse(BaseModel):
+    """Health check response."""
+    status: str
+    service: str
+
+
+class ImageUploadResponse(BaseModel):
+    """Response from image upload endpoint."""
+    url: str
+    secure_url: str
+    public_id: str

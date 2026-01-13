@@ -55,6 +55,14 @@ class RemoveAliasInput(BaseModel):
     alias: str = Field(description="Alias to remove")
 
 
+class GetFabricInput(BaseModel):
+    fabric_code: str = Field(description="Fabric code to retrieve")
+
+
+class GetAliasesInput(BaseModel):
+    fabric_code: str = Field(description="Fabric code to get aliases for")
+
+
 class SearchFabricsInput(BaseModel):
     q: Optional[str] = Field(None, description="Free text search across fabric_code, name, and aliases")
     fabric_code: Optional[str] = Field(None, description="Filter by fabric code (partial match)")
@@ -91,6 +99,11 @@ class GetVariantInput(BaseModel):
     color_code: str = Field(description="Color code")
 
 
+class DeleteVariantInput(BaseModel):
+    fabric_code: str = Field(description="Fabric code")
+    color_code: str = Field(description="Color code of the variant to delete")
+
+
 class SearchVariantsInput(BaseModel):
     q: Optional[str] = Field(None, description="Free text search")
     fabric_code: Optional[str] = Field(None, description="Filter by fabric code")
@@ -98,10 +111,16 @@ class SearchVariantsInput(BaseModel):
     gsm: Optional[int] = Field(None, description="Filter by exact GSM")
     gsm_min: Optional[int] = Field(None, description="Minimum GSM")
     gsm_max: Optional[int] = Field(None, description="Maximum GSM")
+    width: Optional[int] = Field(None, description="Filter by exact width in inches")
+    width_min: Optional[int] = Field(None, description="Minimum width in inches")
+    width_max: Optional[int] = Field(None, description="Maximum width in inches")
+    finish: Optional[str] = Field(None, description="Filter by finish type (partial match)")
     include_stock: bool = Field(False, description="Include stock information")
     in_stock_only: bool = Field(False, description="Only return variants with stock > 0")
     limit: int = Field(20, ge=1, le=100, description="Max results to return")
     offset: int = Field(0, ge=0, description="Number of results to skip")
+    sort_by: str = Field("color_code", description="Sort field: id, fabric_code, color_code, gsm, width")
+    sort_dir: str = Field("asc", description="Sort direction: asc or desc")
 
 
 class MovementInput(BaseModel):
@@ -219,6 +238,16 @@ async def list_tools() -> list[Tool]:
             inputSchema=RemoveAliasInput.model_json_schema()
         ),
         Tool(
+            name="get_fabric",
+            description="Get a fabric by its fabric_code",
+            inputSchema=GetFabricInput.model_json_schema()
+        ),
+        Tool(
+            name="get_aliases",
+            description="Get all aliases for a fabric by fabric_code",
+            inputSchema=GetAliasesInput.model_json_schema()
+        ),
+        Tool(
             name="search_fabrics",
             description="Search fabrics by name, code, or aliases with pagination",
             inputSchema=SearchFabricsInput.model_json_schema()
@@ -237,6 +266,11 @@ async def list_tools() -> list[Tool]:
             name="get_variant",
             description="Get variant details by fabric_code + color_code",
             inputSchema=GetVariantInput.model_json_schema()
+        ),
+        Tool(
+            name="delete_variant",
+            description="Delete a variant by fabric_code + color_code",
+            inputSchema=DeleteVariantInput.model_json_schema()
         ),
         Tool(
             name="search_variants",
@@ -430,6 +464,33 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                     text=f"Alias '{args.alias}' not found for fabric '{args.fabric_code}'"
                 )]
 
+        elif name == "get_fabric":
+            args = GetFabricInput(**arguments)
+            result = repo.get_fabric_by_code(args.fabric_code)
+            if result is None:
+                return [TextContent(
+                    type="text",
+                    text=f"Error: Fabric '{args.fabric_code}' not found"
+                )]
+            return [TextContent(
+                type="text",
+                text=f"Fabric details:\n{serialize_result(result)}"
+            )]
+
+        elif name == "get_aliases":
+            args = GetAliasesInput(**arguments)
+            fabric = repo.get_fabric_by_code(args.fabric_code)
+            if fabric is None:
+                return [TextContent(
+                    type="text",
+                    text=f"Error: Fabric '{args.fabric_code}' not found"
+                )]
+            aliases = repo.get_fabric_aliases(fabric["id"])
+            return [TextContent(
+                type="text",
+                text=f"Aliases for '{args.fabric_code}': {aliases}"
+            )]
+
         elif name == "search_fabrics":
             args = SearchFabricsInput(**arguments)
             items, total = repo.search_fabrics(
@@ -540,6 +601,20 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 text=f"Variant details:\n{serialize_result(result)}"
             )]
 
+        elif name == "delete_variant":
+            args = DeleteVariantInput(**arguments)
+            deleted = repo.delete_variant_by_codes(args.fabric_code, args.color_code)
+            if deleted:
+                return [TextContent(
+                    type="text",
+                    text=f"Variant '{args.color_code}' deleted from fabric '{args.fabric_code}'"
+                )]
+            else:
+                return [TextContent(
+                    type="text",
+                    text=f"Error: Variant '{args.color_code}' not found for fabric '{args.fabric_code}'"
+                )]
+
         elif name == "search_variants":
             args = SearchVariantsInput(**arguments)
             items, total = repo.search_variants(
@@ -549,10 +624,16 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 gsm=args.gsm,
                 gsm_min=args.gsm_min,
                 gsm_max=args.gsm_max,
+                width=args.width,
+                width_min=args.width_min,
+                width_max=args.width_max,
+                finish=args.finish,
                 include_stock=args.include_stock,
                 in_stock_only=args.in_stock_only,
                 limit=args.limit,
-                offset=args.offset
+                offset=args.offset,
+                sort_by=args.sort_by,
+                sort_dir=args.sort_dir
             )
             result = {
                 "items": serialize_result(items),
