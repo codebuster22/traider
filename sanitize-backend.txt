@@ -1,0 +1,1027 @@
+
+ ▐▛███▜▌   Claude Code v2.1.7
+▝▜█████▛▘  Opus 4.5 · Claude Max
+  ▘▘ ▝▝    ~/codebase/products/traider-app/traider
+══════════════════ Conversation compacted · ctrl+o for history ═════════════════
+
+❯ /compact 
+  ⎿  Compacted 
+  ⎿  Read BATCH_API_STATUS.md (237 lines)
+  ⎿  Referenced file src/traider/mcp.py
+  ⎿  Read src/traider/routes/movements.py (187 lines)
+  ⎿  Read src/traider/routes/variants.py (312 lines)
+  ⎿  Referenced file src/traider/repo.py
+  ⎿  Plan file referenced (~/.claude/plans/immutable-roaming-piglet.md)
+
+❯ I want to add couple of endpoints based on my requirements.               
+  1. I want to check movement history with options to filter by             
+  color_code+fabric_code, date ranges, min_quantity, max_quantity           
+  2. I want option to delete stock movement entries which might be added by 
+  mistake. I still want to keep audit trail, so maybe adding a new column,  
+  which represents if this stock movement is real or was cancelled, and in  
+  stock counting only count real stock movement.                            
+                                                                            
+  Create a new execution plan.                                              
+
+● I'll explore the codebase to understand the current movement structure and stock calculations, then design an implementation plan.
+
+● Explore(Explore movements and stock schema)
+  ⎿  Done (6 tool uses · 41.6k tokens · 25s)                             
+
+
+● Now I have a clear understanding. Let me write the implementation plan based on the findings.
+
+● Updated plan
+  ⎿  Error writing file
+
+● Reading Plan(~/.claude/plans/immutable-roaming-piglet.md)
+  ⎿  Read 288 lines
+
+● Updated plan
+  ⎿  /plan to preview                                                    
+        1 -# Batch API Endpoints Implementation Plan                     
+        1 +# Movement History & Soft Delete Implementation Plan          
+        2  
+        3  ## Overview
+        4  
+        5 -Add batch REST API endpoints to reduce HTTP overhead for bulk 
+          -operations. These endpoints will also be exposed via MCP for a
+          -gent discovery.                                               
+        5 +Add two new features:                                         
+        6 +1. **Movement History Query** - Search/filter movement records
+          + with pagination                                              
+        7 +2. **Soft Delete Movements** - Cancel movements while preservi
+          +ng audit trail                                                
+        8  
+        7 -All endpoints use **business identifiers** (`fabric_code` + `c
+          -olor_code`) per the existing migration guide.                 
+        8 -                                                              
+        9  ---
+       10  
+       11 -## Endpoints to Implement                                     
+       11 +## Current State                                              
+       12  
+       13 -| # | Endpoint | Description |                                
+       14 -|---|----------|-------------|                                
+       15 -| 1 | `POST /fabrics/{fabric_code}/variants/batch` | Create mu
+          -ltiple variants under a fabric |                              
+       16 -| 2 | `POST /receive/batch` | Receive stock for multiple varia
+          -nts |                                                         
+       17 -| 3 | `POST /issue/batch` | Issue stock for multiple variants 
+          -|                                                             
+       18 -| 4 | `POST /fabrics/{fabric_code}/variants/search/batch` | Se
+          -arch multiple variants by color codes |                       
+       13 +- **Movements table**: `stock_movements` with columns: `id`, `
+          +ts`, `variant_id`, `movement_type`, `delta_qty_m`, `original_q
+          +ty`, `original_uom`, `reason`, `created_at`, `roll_count`, `do
+          +cument_id`                                                    
+       14 +- **Stock balance**: Denormalized `stock_balances` table updat
+          +ed via UPSERT on each movement (NOT computed from movements)  
+       15 +- **No existing movement query endpoints** - only create opera
+          +tions exist                                                   
+       16  
+       17  ---
+       18  
+       22 -## Implementation Steps                                       
+       19 +## Feature 1: Movement History Query                          
+       20  
+       24 -### Step 1: Add Pydantic Models (`models.py`)                 
+       21 +### Endpoint                                                  
+       22  
+       26 -Add request/response models for batch operations:             
+       23 +```                                                           
+       24 +GET /movements                                                
+       25 +```                                                           
+       26  
+       28 -```python                                                     
+       29 -# Batch Variant Creation                                      
+       30 -class VariantBatchItem(BaseModel):                            
+       31 -    color_code: str                                           
+       32 -    finish: str = "Standard"                                  
+       33 -    gsm: Optional[int] = None                                 
+       34 -    width: Optional[int] = None                               
+       27 +### Query Parameters                                          
+       28  
+       36 -class VariantBatchRequest(BaseModel):                         
+       37 -    variants: list[VariantBatchItem]                          
+       29 +| Parameter | Type | Description |                            
+       30 +|-----------|------|-------------|                            
+       31 +| `fabric_code` | string | Filter by fabric code (exact match)
+          + |                                                            
+       32 +| `color_code` | string | Filter by color code (exact match) |
+       33 +| `movement_type` | string | Filter by type: RECEIPT, ISSUE, A
+          +DJUST |                                                       
+       34 +| `date_from` | datetime | Movements on or after this date |  
+       35 +| `date_to` | datetime | Movements on or before this date |   
+       36 +| `min_qty` | float | Minimum absolute quantity (meters) |    
+       37 +| `max_qty` | float | Maximum absolute quantity (meters) |    
+       38 +| `document_id` | string | Filter by document reference |     
+       39 +| `include_cancelled` | bool | Include cancelled movements (de
+          +fault: false) |                                               
+       40 +| `limit` | int | Max results (default: 20, max: 100) |       
+       41 +| `offset` | int | Pagination offset |                        
+       42  
+       39 -class VariantBatchCreatedItem(BaseModel):                     
+       40 -    fabric_code: str                                          
+       41 -    color_code: str                                           
+       42 -    finish: str                                               
+       43 +### Response                                                  
+       44  
+       44 -class VariantBatchFailedItem(BaseModel):                      
+       45 -    color_code: str                                           
+       46 -    error: str                                                
+       45 +```json                                                       
+       46 +{                                                             
+       47 +  "items": [                                                  
+       48 +    {                                                         
+       49 +      "id": 101,                                              
+       50 +      "ts": "2024-01-15T10:30:00Z",                           
+       51 +      "fabric_code": "LYCRA",                                 
+       52 +      "color_code": "919",                                    
+       53 +      "movement_type": "RECEIPT",                             
+       54 +      "delta_qty_m": 500.0,                                   
+       55 +      "original_qty": 500.0,                                  
+       56 +      "original_uom": "m",                                    
+       57 +      "roll_count": 5,                                        
+       58 +      "document_id": "MILL-2024-001",                         
+       59 +      "reason": "Mill receipt",                               
+       60 +      "is_cancelled": false,                                  
+       61 +      "created_at": "2024-01-15T10:30:00Z"                    
+       62 +    }                                                         
+       63 +  ],                                                          
+       64 +  "total": 150,                                               
+       65 +  "limit": 20,                                                
+       66 +  "offset": 0                                                 
+       67 +}                                                             
+       68 +```                                                           
+       69  
+       48 -class BatchSummary(BaseModel):                                
+       49 -    total: int                                                
+       50 -    created: int = 0                                          
+       51 -    processed: int = 0                                        
+       52 -    failed: int                                               
+       70 +---                                                           
+       71  
+       54 -class VariantBatchResponse(BaseModel):                        
+       55 -    created: list[VariantBatchCreatedItem]                    
+       56 -    failed: list[VariantBatchFailedItem]                      
+       57 -    summary: BatchSummary                                     
+       72 +## Feature 2: Soft Delete (Cancel) Movements                  
+       73  
+       59 -# Batch Stock Movements                                       
+       60 -class MovementBatchItem(BaseModel):                           
+       61 -    fabric_code: str                                          
+       62 -    color_code: str                                           
+       63 -    qty: float                                                
+       64 -    uom: Literal["m", "roll"]                                 
+       65 -    roll_count: Optional[int] = None  # Match existing naming 
+       74 +### Schema Change                                             
+       75  
+       67 -class MovementBatchRequest(BaseModel):                        
+       68 -    items: list[MovementBatchItem]                            
+       69 -    document_id: Optional[str] = None                         
+       70 -    reason: Optional[str] = None                              
+       71 -    customer_name: Optional[str] = None  # For issue          
+       76 +Add column to `stock_movements`:                              
+       77  
+       73 -class MovementBatchProcessedItem(BaseModel):                  
+       74 -    fabric_code: str                                          
+       75 -    color_code: str                                           
+       76 -    qty: float                                                
+       77 -    previous_balance: float                                   
+       78 -    new_balance: float                                        
+       79 -    movement_id: int                                          
+       78 +```sql                                                        
+       79 +ALTER TABLE stock_movements                                   
+       80 +ADD COLUMN is_cancelled BOOLEAN NOT NULL DEFAULT FALSE;       
+       81 +```                                                           
+       82  
+       81 -class MovementBatchFailedItem(BaseModel):                     
+       82 -    fabric_code: str                                          
+       83 -    color_code: str                                           
+       84 -    qty: float                                                
+       85 -    error: str                                                
+       83 +### Endpoint                                                  
+       84  
+       87 -class MovementBatchSummary(BaseModel):                        
+       88 -    total: int                                                
+       89 -    processed: int                                            
+       90 -    failed: int                                               
+       91 -    total_qty: float = 0                                      
+       85 +```                                                           
+       86 +POST /movements/{movement_id}/cancel                          
+       87 +```                                                           
+       88  
+       93 -class MovementBatchResponse(BaseModel):                       
+       94 -    processed: list[MovementBatchProcessedItem]               
+       95 -    failed: list[MovementBatchFailedItem]                     
+       96 -    summary: MovementBatchSummary                             
+       89 +### Request Body (Optional)                                   
+       90  
+       98 -# Batch Variant Search                                        
+       99 -class VariantSearchBatchRequest(BaseModel):                   
+      100 -    color_codes: list[str]                                    
+      101 -    include_stock: bool = False                               
+      102 -                                                              
+      103 -class VariantSearchBatchFoundItem(BaseModel):                 
+      104 -    color_code: str                                           
+      105 -    variant: dict                                             
+      106 -    stock: Optional[dict] = None                              
+      107 -                                                              
+      108 -class VariantSearchBatchResponse(BaseModel):                  
+      109 -    found: list[VariantSearchBatchFoundItem]                  
+      110 -    not_found: list[str]                                      
+      111 -    summary: BatchSummary                                     
+       91 +```json                                                       
+       92 +{                                                             
+       93 +  "reason": "Entered wrong quantity"                          
+       94 +}                                                             
+       95  ```
+       96  
+      114 ----                                                           
+       97 +### Behavior                                                  
+       98  
+      116 -### Step 2: Add Repo Functions (`repo.py`)                    
+       99 +1. Find movement by ID (404 if not found)                     
+      100 +2. Check if already cancelled (400 if yes)                    
+      101 +3. Mark `is_cancelled = TRUE`                                 
+      102 +4. **Reverse the stock balance** by applying `-delta_qty_m` an
+          +d `-roll_count`                                               
+      103 +5. Optionally append cancellation reason to existing reason   
+      104  
+      118 -Add batch database operations:                                
+      105 +### Response                                                  
+      106  
+      120 -```python                                                     
+      121 -def create_variants_batch(fabric_code: str, variants: list[dic
+          -t]) -> tuple[list[dict], list[dict]]:                         
+      122 -    """Create multiple variants. Returns (created, failed) lis
+          -ts."""                                                        
+      123 -    # Get fabric_id first                                     
+      124 -    # Loop through variants, try to insert each               
+      125 -    # Catch UniqueViolation per item                          
+      126 -    # Return both lists                                       
+      107 +```json                                                       
+      108 +{                                                             
+      109 +  "message": "Movement 101 cancelled",                        
+      110 +  "movement_id": 101,                                         
+      111 +  "reversed_qty_m": -500.0,                                   
+      112 +  "new_balance_m": 1000.0                                     
+      113 +}                                                             
+      114 +```                                                           
+      115  
+      128 -def create_movements_batch(                                   
+      129 -    items: list[dict],                                        
+      130 -    movement_type: str,                                       
+      131 -    document_id: Optional[str] = None,                        
+      132 -    reason: Optional[str] = None                              
+      133 -) -> tuple[list[dict], list[dict]]:                           
+      134 -    """Create multiple movements. Returns (processed, failed) 
+          -lists."""                                                     
+      135 -    # For each item:                                          
+      136 -    #   - Look up variant by fabric_code + color_code         
+      137 -    #   - Check stock for ISSUE (if applicable)               
+      138 -    #   - Create movement and update balance                  
+      139 -    #   - Capture previous/new balance                        
+      140 -    # Return both lists                                       
+      116 +### Stock Balance Update Logic                                
+      117  
+      142 -def search_variants_batch(                                    
+      143 -    fabric_code: str,                                         
+      144 -    color_codes: list[str],                                   
+      145 -    include_stock: bool = False                               
+      146 -) -> tuple[list[dict], list[str]]:                            
+      147 -    """Search variants by color codes. Returns (found, not_fou
+          -nd)."""                                                       
+      148 -    # Get fabric_id first                                     
+      149 -    # Query variants WHERE color_code IN (...)                
+      150 -    # Optionally join stock_balances                          
+      151 -    # Return found items and missing color_codes              
+      118 +When cancelling a movement:                                   
+      119 +```sql                                                        
+      120 +UPDATE stock_balances                                         
+      121 +SET                                                           
+      122 +  on_hand_m = on_hand_m - movement.delta_qty_m,               
+      123 +  on_hand_rolls = on_hand_rolls - COALESCE(movement.roll_count
+          +, 0),                                                         
+      124 +  updated_at = now()                                          
+      125 +WHERE variant_id = movement.variant_id                        
+      126  ```
+      127  
+      128 +This reverses the original effect of the movement.            
+      129 +                                                              
+      130  ---
+      131  
+      156 -### Step 3: Add Route Handlers                                
+      132 +## Implementation Steps                                       
+      133  
+      158 -#### 3a. Variants batch route (`routes/variants.py`)          
+      134 +### Step 1: Schema Migration (`db.py`)                        
+      135  
+      160 -```python                                                     
+      161 -@nested_router.post("/fabrics/{fabric_code}/variants/batch", s
+          -tatus_code=201)                                               
+      162 -def create_variants_batch_route(fabric_code: str, batch: Varia
+          -ntBatchRequest):                                              
+      163 -    # Validate fabric exists (404 if not)                     
+      164 -    # Validate max batch size (100)                           
+      165 -    # Call repo.create_variants_batch()                       
+      166 -    # Return 201 if all success, 207 if partial               
+      167 -```                                                           
+      136 +Add `is_cancelled` column to DDL and include migration for exi
+          +sting databases.                                              
+      137  
+      169 -```python                                                     
+      170 -@nested_router.post("/fabrics/{fabric_code}/variants/search/ba
+          -tch")                                                         
+      171 -def search_variants_batch_route(fabric_code: str, request: Var
+          -iantSearchBatchRequest):                                      
+      172 -    # Validate fabric exists (404 if not)                     
+      173 -    # Call repo.search_variants_batch()                       
+      174 -    # Return found + not_found                                
+      175 -```                                                           
+      138 +**File**: `src/traider/db.py`                                 
+      139  
+      177 -#### 3b. Movements batch routes (`routes/movements.py`)       
+      140 +---                                                           
+      141  
+      179 -```python                                                     
+      180 -@router.post("/receive/batch", status_code=201)               
+      181 -def receive_batch(batch: MovementBatchRequest):               
+      182 -    # Validate max batch size (50)                            
+      183 -    # Call repo.create_movements_batch(movement_type="RECEIPT"
+          -)                                                             
+      184 -    # Return 201 if all success, 207 if partial               
+      142 +### Step 2: Pydantic Models (`models.py`)                     
+      143  
+      186 -@router.post("/issue/batch", status_code=201)                 
+      187 -def issue_batch(batch: MovementBatchRequest):                 
+      188 -    # Validate max batch size (50)                            
+      189 -    # Call repo.create_movements_batch(movement_type="ISSUE") 
+      190 -    # Check sufficient stock per item (fail item if insufficie
+          -nt)                                                           
+      191 -    # Return 201 if all success, 207 if partial               
+      192 -```                                                           
+      144 +Add models for movement history and cancellation:             
+      145 +- `MovementHistoryItem` - single movement with fabric_code, co
+          +lor_code, is_cancelled                                        
+      146 +- `MovementHistoryResponse` - paginated list with items, total
+          +, limit, offset                                               
+      147 +- `CancelMovementRequest` - optional reason                   
+      148 +- `CancelMovementResponse` - message, movement_id, reversed_qt
+          +y_m, new_balance_m                                            
+      149  
+      150 +**File**: `src/traider/models.py`                             
+      151 +                                                              
+      152  ---
+      153  
+      196 -### Step 4: Add MCP Tools (`mcp.py`)                          
+      154 +### Step 3: Repository Functions (`repo.py`)                  
+      155  
+      198 -Add input schemas and tool handlers:                          
+      156 +Add two new functions:                                        
+      157  
+      158  ```python
+      201 -# Input schemas                                               
+      202 -class CreateVariantsBatchInput(BaseModel):                    
+      203 -    fabric_code: str                                          
+      204 -    variants: list[dict]                                      
+      159 +def search_movements(                                         
+      160 +    fabric_code: Optional[str] = None,                        
+      161 +    color_code: Optional[str] = None,                         
+      162 +    movement_type: Optional[str] = None,                      
+      163 +    date_from: Optional[datetime] = None,                     
+      164 +    date_to: Optional[datetime] = None,                       
+      165 +    min_qty: Optional[float] = None,                          
+      166 +    max_qty: Optional[float] = None,                          
+      167 +    document_id: Optional[str] = None,                        
+      168 +    include_cancelled: bool = False,                          
+      169 +    limit: int = 20,                                          
+      170 +    offset: int = 0                                           
+      171 +) -> tuple[list[dict], int]:                                  
+      172 +    """Search movements with filters. Returns (items, total)."
+          +""                                                            
+      173  
+      206 -class ReceiveStockBatchInput(BaseModel):                      
+      207 -    items: list[dict]                                         
+      208 -    document_id: Optional[str] = None                         
+      174 +def cancel_movement(                                          
+      175 +    movement_id: int,                                         
+      176      reason: Optional[str] = None
+      177 +) -> Optional[dict]:                                          
+      178 +    """Cancel a movement and reverse stock balance."""        
+      179 +```                                                           
+      180  
+      211 -class IssueStockBatchInput(BaseModel):                        
+      212 -    items: list[dict]                                         
+      213 -    document_id: Optional[str] = None                         
+      214 -    customer_name: Optional[str] = None                       
+      181 +**File**: `src/traider/repo.py`                               
+      182  
+      216 -class SearchVariantsBatchInput(BaseModel):                    
+      217 -    fabric_code: str                                          
+      218 -    color_codes: list[str]                                    
+      219 -    include_stock: bool = False                               
+      183 +---                                                           
+      184 +                                                              
+      185 +### Step 4: Route Handlers (`routes/movements.py`)            
+      186 +                                                              
+      187 +```python                                                     
+      188 +@router.get("", response_model=MovementHistoryResponse)       
+      189 +def list_movements(...):                                      
+      190 +    """Search movement history with optional filters."""      
+      191 +                                                              
+      192 +@router.post("/{movement_id}/cancel", response_model=CancelMov
+          +ementResponse)                                                
+      193 +def cancel_movement_route(movement_id: int, request: CancelMov
+          +ementRequest = None):                                         
+      194 +    """Cancel a movement (soft delete) and reverse stock balan
+          +ce."""                                                        
+      195  ```
+      196  
+      222 -Register tools in `list_tools()`:                             
+      223 -- `create_variants_batch`                                     
+      224 -- `receive_stock_batch`                                       
+      225 -- `issue_stock_batch`                                         
+      226 -- `search_variants_batch`                                     
+      197 +**File**: `src/traider/routes/movements.py`                   
+      198  
+      228 -Add handlers in `call_tool()` that call the corresponding repo
+          - functions.                                                   
+      199 +---                                                           
+      200  
+      201 +### Step 5: MCP Tools (`mcp.py`)                              
+      202 +                                                              
+      203 +Add two new tools:                                            
+      204 +                                                              
+      205 +| Tool | Description |                                        
+      206 +|------|-------------|                                        
+      207 +| `search_movements` | Query movement history with filters |  
+      208 +| `cancel_movement` | Cancel a movement and reverse its effect
+          + |                                                            
+      209 +                                                              
+      210 +**File**: `src/traider/mcp.py`                                
+      211 +                                                              
+      212  ---
+      213  
+      214  ## Files to Modify
+      215  
+      216  | File | Changes |
+      217  |------|---------|
+      236 -| `src/traider/models.py` | Add batch request/response models 
+          -|                                                             
+      237 -| `src/traider/repo.py` | Add `create_variants_batch`, `create
+          -_movements_batch`, `search_variants_batch` |                  
+      238 -| `src/traider/routes/variants.py` | Add batch create and sear
+          -ch endpoints |                                                
+      239 -| `src/traider/routes/movements.py` | Add receive/issue batch 
+          -endpoints |                                                   
+      240 -| `src/traider/mcp.py` | Add 4 new MCP tools |                
+      218 +| `src/traider/db.py` | Add `is_cancelled` column to schema + 
+          +migration |                                                   
+      219 +| `src/traider/models.py` | Add 4 new models for history and c
+          +ancel |                                                       
+      220 +| `src/traider/repo.py` | Add `search_movements()` and `cancel
+          +_movement()` |                                                
+      221 +| `src/traider/routes/movements.py` | Add `GET /movements` and
+          + `POST /movements/{id}/cancel` |                              
+      222 +| `src/traider/mcp.py` | Add 2 new MCP tools |                
+      223  
+      224  ---
+      225  
+     ...
+      227  
+      228  | Code | When |
+      229  |------|------|
+      248 -| 201 | All items processed successfully |                    
+      249 -| 207 | Partial success (some items failed) |                 
+      250 -| 400 | Invalid request body / validation error |             
+      251 -| 404 | Fabric not found (for nested routes) |                
+      230 +| 200 | Movement history retrieved / Movement cancelled |     
+      231 +| 400 | Movement already cancelled / Invalid request |        
+      232 +| 404 | Movement not found |                                  
+      233  
+      234  ---
+      235  
+      255 -## Design Decisions                                           
+      236 +## Verification                                               
+      237  
+      257 -1. **UOM values**: Use `m | roll` to match existing codebase (
+          -not `m | pcs | kg` from spec)                                 
+      258 -2. **Transaction handling**: Independent per-item processing (
+          -partial success with 207 response)                            
+      259 -3. **Negative stock**: Allowed by default - no insufficient st
+          -ock check for issue batch                                     
+      238 +1. **Schema migration**: Run server, verify `is_cancelled` col
+          +umn exists                                                    
+      239 +2. **Movement history**:                                      
+      240 +   - Create several movements via existing endpoints          
+      241 +   - Query `GET /movements` with various filters              
+      242 +   - Verify pagination works correctly                        
+      243 +3. **Cancel movement**:                                       
+      244 +   - Cancel a movement                                        
+      245 +   - Verify stock balance is reversed                         
+      246 +   - Verify movement shows `is_cancelled: true` in history    
+      247 +   - Verify cancelled movements excluded by default           
+      248 +   - Try to cancel same movement again (should fail with 400) 
+      249 +4. **MCP tools**: Test via Claude Desktop or MCP inspector    
+      250  
+      251  ---
+      252  
+      263 -## Validation Rules                                           
+      253 +## Edge Cases                                                 
+      254  
+      265 -| Endpoint | Max Batch Size | Notes |                         
+      266 -|----------|---------------|-------|                          
+      267 -| Create variants batch | 100 | Fail item if duplicate `color_
+          -code` |                                                       
+      268 -| Receive batch | 50 | Fail item if variant not found |       
+      269 -| Issue batch | 50 | Fail item if variant not found (negative 
+          -stock allowed) |                                              
+      270 -| Search batch | N/A | Just return not_found list |           
+      271 -                                                              
+      272 ----                                                           
+      273 -                                                              
+      274 -## Response Format Pattern                                    
+      275 -                                                              
+      276 -All batch responses follow this pattern:                      
+      277 -```json                                                       
+      278 -{                                                             
+      279 -  "created/processed/found": [...],                           
+      280 -  "failed/not_found": [...],                                  
+      281 -  "summary": {                                                
+      282 -    "total": N,                                               
+      283 -    "created/processed/found": X,                             
+      284 -    "failed/not_found": Y                                     
+      285 -  }                                                           
+      286 -}                                                             
+      287 -```                                                           
+      255 +| Scenario | Behavior |                                       
+      256 +|----------|----------|                                       
+      257 +| Cancel already cancelled movement | 400 Bad Request |       
+      258 +| Cancel non-existent movement | 404 Not Found |              
+      259 +| Filter by fabric_code only | Return all movements for that f
+          +abric |                                                       
+      260 +| Filter by color_code only | Return movements for any fabric 
+          +with that color |                                             
+      261 +| Negative balance after cancel | Allowed (per existing design
+          +) |                                                           
+
+● The plan is written. I have a few clarifying questions before finalizing:
+                                                                         
+● User answered Claude's questions:
+  ⎿  · For quantity filtering (min_qty, max_qty), should this filter on 
+     absolute values or signed values? (ISSUE movements have negative 
+     delta_qty_m) → Absolute values (Recommended)
+     · Should the movement history support sorting? → Yes - by date, qty, 
+     type
+
+     · When cancelling, should we track who/when cancelled? → is_cancelled,
+      reason, cancelled_at
+
+● Let me update the plan with your preferences.
+
+● Updated plan
+  ⎿  /plan to preview                                                    
+      33  | `movement_type` | string | Filter by type: RECEIPT, ISSUE, AD
+          JUST |
+      34  | `date_from` | datetime | Movements on or after this date |
+      35  | `date_to` | datetime | Movements on or before this date |
+      36 -| `min_qty` | float | Minimum absolute quantity (meters) |     
+      37 -| `max_qty` | float | Maximum absolute quantity (meters) |     
+      36 +| `min_qty` | float | Minimum absolute quantity in meters (filt
+         +ers on ABS(delta_qty_m)) |                                     
+      37 +| `max_qty` | float | Maximum absolute quantity in meters (filt
+         +ers on ABS(delta_qty_m)) |                                     
+      38  | `document_id` | string | Filter by document reference |
+      39  | `include_cancelled` | bool | Include cancelled movements (def
+          ault: false) |
+      40  | `limit` | int | Max results (default: 20, max: 100) |
+      41  | `offset` | int | Pagination offset |
+      42 +| `sort_by` | string | Sort field: ts, delta_qty_m, movement_ty
+         +pe (default: ts) |                                             
+      43 +| `sort_dir` | string | Sort direction: asc, desc (default: des
+         +c) |                                                           
+      44  
+      45  ### Response
+      46  
+
+● Updated plan
+  ⎿  /plan to preview                                                    
+      75  
+      76  ### Schema Change
+      77  
+      78 -Add column to `stock_movements`:                               
+      78 +Add columns to `stock_movements`:                              
+      79  
+      80  ```sql
+      81  ALTER TABLE stock_movements
+      82 -ADD COLUMN is_cancelled BOOLEAN NOT NULL DEFAULT FALSE;        
+      82 +ADD COLUMN is_cancelled BOOLEAN NOT NULL DEFAULT FALSE,        
+      83 +ADD COLUMN cancelled_at TIMESTAMPTZ NULL;                      
+      84  ```
+      85  
+      86  ### Endpoint
+
+● Updated plan
+  ⎿  /plan to preview                                                    
+      101  
+      102  1. Find movement by ID (404 if not found)
+      103  2. Check if already cancelled (400 if yes)
+      104 -3. Mark `is_cancelled = TRUE`                                 
+      104 +3. Mark `is_cancelled = TRUE` and set `cancelled_at = now()`  
+      105  4. **Reverse the stock balance** by applying `-delta_qty_m` an
+           d `-roll_count`
+      106  5. Optionally append cancellation reason to existing reason
+      107  
+
+● Updated plan
+  ⎿  /plan to preview                                                    
+      60        "document_id": "MILL-2024-001",
+      61        "reason": "Mill receipt",
+      62        "is_cancelled": false,
+      63 +      "cancelled_at": null,                                    
+      64        "created_at": "2024-01-15T10:30:00Z"
+      65      }
+      66    ],
+
+● Updated plan
+  ⎿  /plan to preview                                                    
+      113    "message": "Movement 101 cancelled",
+      114    "movement_id": 101,
+      115    "reversed_qty_m": -500.0,
+      116 -  "new_balance_m": 1000.0                                     
+      116 +  "new_balance_m": 1000.0,                                    
+      117 +  "cancelled_at": "2024-01-15T11:00:00Z"                      
+      118  }
+      119  ```
+      120  
+
+● Updated plan
+  ⎿  /plan to preview                                                    
+      147  ### Step 2: Pydantic Models (`models.py`)
+      148  
+      149  Add models for movement history and cancellation:
+      150 -- `MovementHistoryItem` - single movement with fabric_code, co
+          -lor_code, is_cancelled                                        
+      150 +- `MovementHistoryItem` - single movement with fabric_code, co
+          +lor_code, is_cancelled, cancelled_at                          
+      151  - `MovementHistoryResponse` - paginated list with items, total
+           , limit, offset
+      152  - `CancelMovementRequest` - optional reason
+      153 -- `CancelMovementResponse` - message, movement_id, reversed_qt
+          -y_m, new_balance_m                                            
+      153 +- `CancelMovementResponse` - message, movement_id, reversed_qt
+          +y_m, new_balance_m, cancelled_at                              
+      154  
+      155  **File**: `src/traider/models.py`
+      156  
+
+● Updated plan
+  ⎿  /plan to preview                                                    
+      172      document_id: Optional[str] = None,
+      173      include_cancelled: bool = False,
+      174      limit: int = 20,
+      175 -    offset: int = 0                                           
+      175 +    offset: int = 0,                                          
+      176 +    sort_by: str = "ts",                                      
+      177 +    sort_dir: str = "desc"                                    
+      178  ) -> tuple[list[dict], int]:
+      179      """Search movements with filters. Returns (items, total)."
+           ""
+      180  
+
+● Updated plan
+  ⎿  /plan to preview                                                    
+      193  
+      194  ```python
+      195  @router.get("", response_model=MovementHistoryResponse)
+      196 -def list_movements(...):                                      
+      197 -    """Search movement history with optional filters."""      
+      196 +def list_movements(                                           
+      197 +    fabric_code, color_code, movement_type, date_from, date_to
+          +,                                                             
+      198 +    min_qty, max_qty, document_id, include_cancelled,         
+      199 +    limit, offset, sort_by, sort_dir                          
+      200 +):                                                            
+      201 +    """Search movement history with optional filters and sorti
+          +ng."""                                                        
+      202  
+      203  @router.post("/{movement_id}/cancel", response_model=CancelMov
+           ementResponse)
+      204  def cancel_movement_route(movement_id: int, request: CancelMov
+           ementRequest = None):
+
+● The plan is now complete with all your preferences incorporated:
+  - Quantity filtering uses absolute values
+  - Sorting support with sort_by and sort_dir parameters
+  - cancelled_at timestamp for audit trail
+  ⎿  User rejected Claude's plan:
+     ╭─────────────────────────────────────────────────────────────────────────╮
+     │ Movement History & Soft Delete Implementation Plan                      │
+     │                                                                         │
+     │ Overview                                                                │
+     │                                                                         │
+     │ Add two new features:                                                   │
+     │ 1. Movement History Query - Search/filter movement records with         │
+     │ pagination                                                              │
+     │ 2. Soft Delete Movements - Cancel movements while preserving audit      │
+     │ trail                                                                   │
+     │                                                                         │
+     │ ---                                                                     │
+     │ Current State                                                           │
+     │                                                                         │
+     │ - Movements table: stock_movements with columns: id, ts, variant_id,    │
+     │ movement_type, delta_qty_m, original_qty, original_uom, reason,         │
+     │ created_at, roll_count, document_id                                     │
+     │ - Stock balance: Denormalized stock_balances table updated via UPSERT   │
+     │ on each movement (NOT computed from movements)                          │
+     │ - No existing movement query endpoints - only create operations exist   │
+     │                                                                         │
+     │ ---                                                                     │
+     │ Feature 1: Movement History Query                                       │
+     │                                                                         │
+     │ Endpoint                                                                │
+     │                                                                         │
+     │ GET /movements                                                          │
+     │                                                                         │
+     │ Query Parameters                                                        │
+     │ Parameter: fabric_code                                                  │
+     │ Type: string                                                            │
+     │ Description: Filter by fabric code (exact match)                        │
+     │ ────────────────────────────────────────                                │
+     │ Parameter: color_code                                                   │
+     │ Type: string                                                            │
+     │ Description: Filter by color code (exact match)                         │
+     │ ────────────────────────────────────────                                │
+     │ Parameter: movement_type                                                │
+     │ Type: string                                                            │
+     │ Description: Filter by type: RECEIPT, ISSUE, ADJUST                     │
+     │ ────────────────────────────────────────                                │
+     │ Parameter: date_from                                                    │
+     │ Type: datetime                                                          │
+     │ Description: Movements on or after this date                            │
+     │ ────────────────────────────────────────                                │
+     │ Parameter: date_to                                                      │
+     │ Type: datetime                                                          │
+     │ Description: Movements on or before this date                           │
+     │ ────────────────────────────────────────                                │
+     │ Parameter: min_qty                                                      │
+     │ Type: float                                                             │
+     │ Description: Minimum absolute quantity in meters (filters on            │
+     │ ABS(delta_qty_m))                                                       │
+     │ ────────────────────────────────────────                                │
+     │ Parameter: max_qty                                                      │
+     │ Type: float                                                             │
+     │ Description: Maximum absolute quantity in meters (filters on            │
+     │ ABS(delta_qty_m))                                                       │
+     │ ────────────────────────────────────────                                │
+     │ Parameter: document_id                                                  │
+     │ Type: string                                                            │
+     │ Description: Filter by document reference                               │
+     │ ────────────────────────────────────────                                │
+     │ Parameter: include_cancelled                                            │
+     │ Type: bool                                                              │
+     │ Description: Include cancelled movements (default: false)               │
+     │ ────────────────────────────────────────                                │
+     │ Parameter: limit                                                        │
+     │ Type: int                                                               │
+     │ Description: Max results (default: 20, max: 100)                        │
+     │ ────────────────────────────────────────                                │
+     │ Parameter: offset                                                       │
+     │ Type: int                                                               │
+     │ Description: Pagination offset                                          │
+     │ ────────────────────────────────────────                                │
+     │ Parameter: sort_by                                                      │
+     │ Type: string                                                            │
+     │ Description: Sort field: ts, delta_qty_m, movement_type (default: ts)   │
+     │ ────────────────────────────────────────                                │
+     │ Parameter: sort_dir                                                     │
+     │ Type: string                                                            │
+     │ Description: Sort direction: asc, desc (default: desc)                  │
+     │ Response                                                                │
+     │                                                                         │
+     │ {                                                                       │
+     │   "items": [                                                            │
+     │     {                                                                   │
+     │       "id": 101,                                                        │
+     │       "ts": "2024-01-15T10:30:00Z",                                     │
+     │       "fabric_code": "LYCRA",                                           │
+     │       "color_code": "919",                                              │
+     │       "movement_type": "RECEIPT",                                       │
+     │       "delta_qty_m": 500.0,                                             │
+     │       "original_qty": 500.0,                                            │
+     │       "original_uom": "m",                                              │
+     │       "roll_count": 5,                                                  │
+     │       "document_id": "MILL-2024-001",                                   │
+     │       "reason": "Mill receipt",                                         │
+     │       "is_cancelled": false,                                            │
+     │       "cancelled_at": null,                                             │
+     │       "created_at": "2024-01-15T10:30:00Z"                              │
+     │     }                                                                   │
+     │   ],                                                                    │
+     │   "total": 150,                                                         │
+     │   "limit": 20,                                                          │
+     │   "offset": 0                                                           │
+     │ }                                                                       │
+     │                                                                         │
+     │ ---                                                                     │
+     │ Feature 2: Soft Delete (Cancel) Movements                               │
+     │                                                                         │
+     │ Schema Change                                                           │
+     │                                                                         │
+     │ Add columns to stock_movements:                                         │
+     │                                                                         │
+     │ ALTER TABLE stock_movements                                             │
+     │ ADD COLUMN is_cancelled BOOLEAN NOT NULL DEFAULT FALSE,                 │
+     │ ADD COLUMN cancelled_at TIMESTAMPTZ NULL;                               │
+     │                                                                         │
+     │ Endpoint                                                                │
+     │                                                                         │
+     │ POST /movements/{movement_id}/cancel                                    │
+     │                                                                         │
+     │ Request Body (Optional)                                                 │
+     │                                                                         │
+     │ {                                                                       │
+     │   "reason": "Entered wrong quantity"                                    │
+     │ }                                                                       │
+     │                                                                         │
+     │ Behavior                                                                │
+     │                                                                         │
+     │ 1. Find movement by ID (404 if not found)                               │
+     │ 2. Check if already cancelled (400 if yes)                              │
+     │ 3. Mark is_cancelled = TRUE and set cancelled_at = now()                │
+     │ 4. Reverse the stock balance by applying -delta_qty_m and -roll_count   │
+     │ 5. Optionally append cancellation reason to existing reason             │
+     │                                                                         │
+     │ Response                                                                │
+     │                                                                         │
+     │ {                                                                       │
+     │   "message": "Movement 101 cancelled",                                  │
+     │   "movement_id": 101,                                                   │
+     │   "reversed_qty_m": -500.0,                                             │
+     │   "new_balance_m": 1000.0,                                              │
+     │   "cancelled_at": "2024-01-15T11:00:00Z"                                │
+     │ }                                                                       │
+     │                                                                         │
+     │ Stock Balance Update Logic                                              │
+     │                                                                         │
+     │ When cancelling a movement:                                             │
+     │ UPDATE stock_balances                                                   │
+     │ SET                                                                     │
+     │   on_hand_m = on_hand_m - movement.delta_qty_m,                         │
+     │   on_hand_rolls = on_hand_rolls - COALESCE(movement.roll_count, 0),     │
+     │   updated_at = now()                                                    │
+     │ WHERE variant_id = movement.variant_id                                  │
+     │                                                                         │
+     │ This reverses the original effect of the movement.                      │
+     │                                                                         │
+     │ ---                                                                     │
+     │ Implementation Steps                                                    │
+     │                                                                         │
+     │ Step 1: Schema Migration (db.py)                                        │
+     │                                                                         │
+     │ Add is_cancelled column to DDL and include migration for existing       │
+     │ databases.                                                              │
+     │                                                                         │
+     │ File: src/traider/db.py                                                 │
+     │                                                                         │
+     │ ---                                                                     │
+     │ Step 2: Pydantic Models (models.py)                                     │
+     │                                                                         │
+     │ Add models for movement history and cancellation:                       │
+     │ - MovementHistoryItem - single movement with fabric_code, color_code,   │
+     │ is_cancelled, cancelled_at                                              │
+     │ - MovementHistoryResponse - paginated list with items, total, limit,    │
+     │ offset                                                                  │
+     │ - CancelMovementRequest - optional reason                               │
+     │ - CancelMovementResponse - message, movement_id, reversed_qty_m,        │
+     │ new_balance_m, cancelled_at                                             │
+     │                                                                         │
+     │ File: src/traider/models.py                                             │
+     │                                                                         │
+     │ ---                                                                     │
+     │ Step 3: Repository Functions (repo.py)                                  │
+     │                                                                         │
+     │ Add two new functions:                                                  │
+     │                                                                         │
+     │ def search_movements(                                                   │
+     │     fabric_code: Optional[str] = None,                                  │
+     │     color_code: Optional[str] = None,                                   │
+     │     movement_type: Optional[str] = None,                                │
+     │     date_from: Optional[datetime] = None,                               │
+     │     date_to: Optional[datetime] = None,                                 │
+     │     min_qty: Optional[float] = None,                                    │
+     │     max_qty: Optional[float] = None,                                    │
+     │     document_id: Optional[str] = None,                                  │
+     │     include_cancelled: bool = False,                                    │
+     │     limit: int = 20,                                                    │
+     │     offset: int = 0,                                                    │
+     │     sort_by: str = "ts",                                                │
+     │     sort_dir: str = "desc"                                              │
+     │ ) -> tuple[list[dict], int]:                                            │
+     │     """Search movements with filters. Returns (items, total)."""        │
+     │                                                                         │
+     │ def cancel_movement(                                                    │
+     │     movement_id: int,                                                   │
+     │     reason: Optional[str] = None                                        │
+     │ ) -> Optional[dict]:                                                    │
+     │     """Cancel a movement and reverse stock balance."""                  │
+     │                                                                         │
+     │ File: src/traider/repo.py                                               │
+     │                                                                         │
+     │ ---                                                                     │
+     │ Step 4: Route Handlers (routes/movements.py)                            │
+     │                                                                         │
+     │ @router.get("", response_model=MovementHistoryResponse)                 │
+     │ def list_movements(                                                     │
+     │     fabric_code, color_code, movement_type, date_from, date_to,         │
+     │     min_qty, max_qty, document_id, include_cancelled,                   │
+     │     limit, offset, sort_by, sort_dir                                    │
+     │ ):                                                                      │
+     │     """Search movement history with optional filters and sorting."""    │
+     │                                                                         │
+     │ @router.post("/{movement_id}/cancel",                                   │
+     │ response_model=CancelMovementResponse)                                  │
+     │ def cancel_movement_route(movement_id: int, request:                    │
+     │ CancelMovementRequest = None):                                          │
+     │     """Cancel a movement (soft delete) and reverse stock balance."""    │
+     │                                                                         │
+     │ File: src/traider/routes/movements.py                                   │
+     │                                                                         │
+     │ ---                                                                     │
+     │ Step 5: MCP Tools (mcp.py)                                              │
+     │                                                                         │
+     │ Add two new tools:                                                      │
+     │ ┌──────────────────┬──────────────────────────────────────────┐         │
+     │ │       Tool       │               Description                │         │
+     │ ├──────────────────┼──────────────────────────────────────────┤         │
+     │ │ search_movements │ Query movement history with filters      │         │
+     │ ├──────────────────┼──────────────────────────────────────────┤         │
+     │ │ cancel_movement  │ Cancel a movement and reverse its effect │         │
+     │ └──────────────────┴──────────────────────────────────────────┘         │
+     │ File: src/traider/mcp.py                                                │
+     │                                                                         │
+     │ ---                                                                     │
+     │ Files to Modify                                                         │
+     │ File: src/traider/db.py                                                 │
+     │ Changes: Add is_cancelled column to schema + migration                  │
+     │ ────────────────────────────────────────                                │
+     │ File: src/traider/models.py                                             │
+     │ Changes: Add 4 new models for history and cancel                        │
+     │ ────────────────────────────────────────                                │
+     │ File: src/traider/repo.py                                               │
+     │ Changes: Add search_movements() and cancel_movement()                   │
+     │ ────────────────────────────────────────                                │
+     │ File: src/traider/routes/movements.py                                   │
+     │ Changes: Add GET /movements and POST /movements/{id}/cancel             │
+     │ ────────────────────────────────────────                                │
+     │ File: src/traider/mcp.py                                                │
+     │ Changes: Add 2 new MCP tools                                            │
+     │ ---                                                                     │
+     │ HTTP Status Codes                                                       │
+     │ ┌──────┬─────────────────────────────────────────────────┐              │
+     │ │ Code │                      When                       │              │
+     │ ├──────┼─────────────────────────────────────────────────┤              │
+     │ │ 200  │ Movement history retrieved / Movement cancelled │              │
+     │ ├──────┼─────────────────────────────────────────────────┤              │
+     │ │ 400  │ Movement already cancelled / Invalid request    │              │
+     │ ├──────┼─────────────────────────────────────────────────┤              │
+     │ │ 404  │ Movement not found                              │              │
+     │ └──────┴─────────────────────────────────────────────────┘              │
+     │ ---                                                                     │
+     │ Verification                                                            │
+     │                                                                         │
+     │ 1. Schema migration: Run server, verify is_cancelled column exists      │
+     │ 2. Movement history:                                                    │
+     │   - Create several movements via existing endpoints                     │
+     │   - Query GET /movements with various filters                           │
+     │   - Verify pagination works correctly                                   │
+     │ 3. Cancel movement:                                                     │
+     │   - Cancel a movement                                                   │
+     │   - Verify stock balance is reversed                                    │
+     │   - Verify movement shows is_cancelled: true in history                 │
+     │   - Verify cancelled movements excluded by default                      │
+     │   - Try to cancel same movement again (should fail with 400)            │
+     │ 4. MCP tools: Test via Claude Desktop or MCP inspector                  │
+     │                                                                         │
+     │ ---                                                                     │
+     │ Edge Cases                                                              │
+     │ Scenario: Cancel already cancelled movement                             │
+     │ Behavior: 400 Bad Request                                               │
+     │ ────────────────────────────────────────                                │
+     │ Scenario: Cancel non-existent movement                                  │
+     │ Behavior: 404 Not Found                                                 │
+     │ ────────────────────────────────────────                                │
+     │ Scenario: Filter by fabric_code only                                    │
+     │ Behavior: Return all movements for that fabric                          │
+     │ ────────────────────────────────────────                                │
+     │ Scenario: Filter by color_code only                                     │
+     │ Behavior: Return movements for any fabric with that color               │
+     │ ────────────────────────────────────────                                │
+     │ Scenario: Negative balance after cancel                                 │
+     │ Behavior: Allowed (per existing design)                                 │
+     ╰─────────────────────────────────────────────────────────────────────────╯
+
+
+
