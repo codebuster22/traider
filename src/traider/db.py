@@ -293,6 +293,101 @@ def run_migrations(conn: psycopg.Connection) -> None:
         conn.commit()
         logger.info("Migration sanitize_codes_cleanup_v1 completed successfully")
 
+    # Run targeted color code fixes
+    _run_targeted_color_fixes(conn)
+
+
+def _run_targeted_color_fixes(conn: psycopg.Connection) -> None:
+    """
+    Targeted one-time fixes for PV_COZIRA_MUL fabric (id=2):
+    1. Merge '901 (A)' into '901A' - move movements, delete old variant
+    2. Rename '905 B' to '905B'
+
+    DELETE THIS FUNCTION AFTER MIGRATION COMPLETES.
+    """
+    with conn.cursor() as cur:
+        # Check if already run
+        cur.execute("SELECT 1 FROM migrations WHERE name = 'targeted_color_fixes_v1'")
+        if cur.fetchone():
+            return  # Already completed
+
+        logger.info("Running migration: targeted_color_fixes_v1")
+        fabric_id = 2  # PV_COZIRA_MUL
+
+        # -----------------------------------------------------------------
+        # Fix 1: Merge '901 (A)' into '901A'
+        # -----------------------------------------------------------------
+        cur.execute(
+            "SELECT id FROM fabric_variants WHERE fabric_id = %s AND color_code = %s",
+            (fabric_id, '901A')
+        )
+        target_row = cur.fetchone()
+
+        cur.execute(
+            "SELECT id FROM fabric_variants WHERE fabric_id = %s AND color_code = %s",
+            (fabric_id, '901 (A)')
+        )
+        source_row = cur.fetchone()
+
+        if target_row and source_row:
+            target_id = target_row['id']
+            source_id = source_row['id']
+
+            # Move all stock movements from source to target
+            cur.execute(
+                "UPDATE stock_movements SET variant_id = %s WHERE variant_id = %s",
+                (target_id, source_id)
+            )
+            moved_count = cur.rowcount
+            logger.info(f"Moved {moved_count} movements from '901 (A)' to '901A'")
+
+            # Delete source variant's stock balance (if exists)
+            cur.execute("DELETE FROM stock_balances WHERE variant_id = %s", (source_id,))
+
+            # Delete source variant
+            cur.execute("DELETE FROM fabric_variants WHERE id = %s", (source_id,))
+            logger.info("Deleted variant '901 (A)'")
+
+            # Recalculate target variant's balance
+            cur.execute("""
+                INSERT INTO stock_balances (variant_id, on_hand_m, on_hand_rolls, updated_at)
+                SELECT
+                    %(variant_id)s,
+                    COALESCE(SUM(delta_qty_m), 0),
+                    COALESCE(SUM(COALESCE(roll_count, 0)), 0),
+                    now()
+                FROM stock_movements
+                WHERE variant_id = %(variant_id)s AND is_cancelled = FALSE
+                ON CONFLICT (variant_id) DO UPDATE
+                SET
+                    on_hand_m = EXCLUDED.on_hand_m,
+                    on_hand_rolls = EXCLUDED.on_hand_rolls,
+                    updated_at = now()
+            """, {"variant_id": target_id})
+            logger.info("Recalculated balance for '901A'")
+        else:
+            if not target_row:
+                logger.warning("Target variant '901A' not found - skipping merge")
+            if not source_row:
+                logger.warning("Source variant '901 (A)' not found - skipping merge")
+
+        # -----------------------------------------------------------------
+        # Fix 2: Rename '05B' to '905B' (missing leading 9)
+        # -----------------------------------------------------------------
+        cur.execute(
+            "UPDATE fabric_variants SET color_code = %s WHERE fabric_id = %s AND color_code = %s",
+            ('905B', fabric_id, '05B')
+        )
+        if cur.rowcount > 0:
+            logger.info("Renamed '05B' to '905B'")
+        else:
+            logger.warning("Variant '05B' not found - skipping rename")
+
+        # Mark complete
+        cur.execute("INSERT INTO migrations (name) VALUES ('targeted_color_fixes_v1')")
+        conn.commit()
+        logger.info("Migration targeted_color_fixes_v1 completed successfully")
+
 
 def init_db() -> None:
     """Initialize database: create tables and indexes, run migrations."""
