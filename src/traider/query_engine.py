@@ -261,8 +261,8 @@ def execute_query(sql: str) -> list[dict]:
     with get_conn() as conn:
         with conn.cursor() as cur:
             try:
-                # Set statement timeout
-                cur.execute(f"SET statement_timeout = '{QUERY_TIMEOUT_SECONDS * 1000}'")
+                # Set statement timeout (LOCAL so it's transaction-scoped)
+                cur.execute(f"SET LOCAL statement_timeout = '{QUERY_TIMEOUT_SECONDS * 1000}'")
 
                 # Execute the query
                 cur.execute(sql)
@@ -270,11 +270,13 @@ def execute_query(sql: str) -> list[dict]:
                 # Fetch results
                 rows = cur.fetchall()
 
-                # Reset timeout
-                cur.execute("SET statement_timeout = '0'")
-
                 # Serialize results
-                return [_serialize_row(row) for row in rows]
+                result = [_serialize_row(row) for row in rows]
+
+                # Rollback to cleanly close the read-only transaction
+                conn.rollback()
+
+                return result
 
             except Exception as e:
                 error_msg = str(e).lower()
