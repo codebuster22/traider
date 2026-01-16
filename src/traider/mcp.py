@@ -3,6 +3,7 @@
 This module provides MCP (Model Context Protocol) tools via HTTP/SSE,
 allowing AI clients like Claude to connect via URL instead of stdio.
 """
+import json
 from datetime import datetime
 from typing import Any, Optional
 from decimal import Decimal
@@ -11,7 +12,7 @@ from mcp.server import Server
 from mcp.types import Tool, TextContent
 from pydantic import BaseModel, Field
 
-from traider import repo
+from traider import repo, query_engine
 from traider.cloudinary_utils import upload_image as cloudinary_upload
 
 
@@ -70,6 +71,8 @@ class SearchFabricsInput(BaseModel):
     name: Optional[str] = Field(None, description="Filter by name (partial match)")
     limit: int = Field(20, ge=1, le=100, description="Max results to return")
     offset: int = Field(0, ge=0, description="Number of results to skip")
+    sort_by: str = Field("fabric_code", description="Sort field: fabric_code, name")
+    sort_dir: str = Field("asc", description="Sort direction: asc or desc")
 
 
 class CreateVariantInput(BaseModel):
@@ -120,7 +123,7 @@ class SearchVariantsInput(BaseModel):
     in_stock_only: bool = Field(False, description="Only return variants with stock > 0")
     limit: int = Field(20, ge=1, le=100, description="Max results to return")
     offset: int = Field(0, ge=0, description="Number of results to skip")
-    sort_by: str = Field("color_code", description="Sort field: id, fabric_code, color_code, gsm, width")
+    sort_by: str = Field("id", description="Sort field: id, fabric_code, color_code, gsm, width")
     sort_dir: str = Field("asc", description="Sort direction: asc or desc")
 
 
@@ -208,6 +211,11 @@ class SearchMovementsInput(BaseModel):
 class CancelMovementInput(BaseModel):
     movement_id: int = Field(description="ID of the movement to cancel")
     reason: Optional[str] = Field(None, description="Reason for cancellation")
+
+
+class QueryDataInput(BaseModel):
+    """Input for natural language query tool."""
+    question: str = Field(..., description="Natural language question about inventory data")
 
 
 # ============================================================================
@@ -356,6 +364,11 @@ async def list_tools() -> list[Tool]:
             name="cancel_movement",
             description="Cancel a movement (soft delete) and reverse its effect on stock balance. Returns error if already cancelled.",
             inputSchema=CancelMovementInput.model_json_schema()
+        ),
+        Tool(
+            name="query_data",
+            description="Execute a natural language query against inventory data. Use for analytical questions like totals, aggregations, filtered lists, and time-based queries.",
+            inputSchema=QueryDataInput.model_json_schema()
         ),
     ]
 
@@ -532,7 +545,9 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 fabric_code=args.fabric_code,
                 name=args.name,
                 limit=args.limit,
-                offset=args.offset
+                offset=args.offset,
+                sort_by=args.sort_by,
+                sort_dir=args.sort_dir
             )
             result = {
                 "items": serialize_result(items),
@@ -1007,6 +1022,14 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             return [TextContent(
                 type="text",
                 text=f"Movement cancelled successfully:\n{serialize_result(result)}"
+            )]
+
+        elif name == "query_data":
+            args = QueryDataInput(**arguments)
+            result = query_engine.query(args.question)
+            return [TextContent(
+                type="text",
+                text=json.dumps(result, default=str)
             )]
 
         else:

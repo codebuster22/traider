@@ -400,8 +400,44 @@ class HealthResponse(BaseModel):
     service: str
 
 
+class ImageUploadRequest(BaseModel):
+    """Request body for image upload."""
+    image_data: str
+    filename: Optional[str] = None
+    folder: str = "traider"
+
+
 class ImageUploadResponse(BaseModel):
     """Response from image upload endpoint."""
     url: str
     secure_url: str
     public_id: str
+
+
+# ============================================================================
+# Natural Language Query
+# ============================================================================
+
+class QueryRequest(BaseModel):
+    """Request body for natural language query."""
+    question: str = Field(..., min_length=1, max_length=1000)
+
+
+class QuerySummary(BaseModel):
+    """Summary of query results."""
+    description: str
+    row_count: int
+
+
+class QueryErrorDetail(BaseModel):
+    """Error details for failed queries."""
+    code: Literal["INVALID_QUERY", "UNSAFE_QUERY", "NO_RESULTS", "TIMEOUT", "INTERNAL_ERROR"]
+    message: str
+
+
+class QueryResponse(BaseModel):
+    """Response from natural language query endpoint."""
+    success: bool
+    data: Optional[list[dict]] = None
+    summary: Optional[QuerySummary] = None
+    error: Optional[QueryErrorDetail] = None

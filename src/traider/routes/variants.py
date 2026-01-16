@@ -154,7 +154,12 @@ def delete_variant_by_codes(fabric_code: str, color_code: str):
 # Batch Routes - /fabrics/{fabric_code}/variants/batch
 # ============================================================================
 
-@nested_router.post("/fabrics/{fabric_code}/variants/batch", response_model=VariantBatchResponse)
+@nested_router.post(
+    "/fabrics/{fabric_code}/variants/batch",
+    response_model=VariantBatchResponse,
+    status_code=201,
+    responses={207: {"model": VariantBatchResponse, "description": "Partial success - some variants failed"}}
+)
 def create_variants_batch(fabric_code: str, batch: VariantBatchRequest):
     """
     Create multiple variants under a single fabric.

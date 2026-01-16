@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from traider.models import (
@@ -20,10 +20,10 @@ router = APIRouter(prefix="/movements", tags=["movements"])
 
 
 # ============================================================================
-# Movement History & Cancellation
+# Movement History
 # ============================================================================
 
-@router.get("", response_model=MovementHistoryResponse)
+@router.get("", response_model=MovementHistoryResponse, status_code=200)
 def list_movements(
     fabric_code: Optional[str] = Query(None, description="Filter by fabric code (exact match)"),
     color_code: Optional[str] = Query(None, description="Filter by color code (exact match)"),
@@ -64,31 +64,8 @@ def list_movements(
     }
 
 
-@router.post("/{movement_id}/cancel", response_model=CancelMovementResponse)
-def cancel_movement_route(
-    movement_id: int,
-    request: Optional[CancelMovementRequest] = None,
-):
-    """
-    Cancel a movement (soft delete) and reverse its effect on stock balance.
-
-    Returns 200 on success, 400 if already cancelled, 404 if not found.
-    """
-    reason = request.reason if request else None
-
-    try:
-        result = repo.cancel_movement(movement_id, reason=reason)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    if result is None:
-        raise HTTPException(status_code=404, detail=f"Movement {movement_id} not found")
-
-    return result
-
-
 # ============================================================================
-# Create Movements
+# Create Movements (specific paths BEFORE parameterized paths)
 # ============================================================================
 
 @router.post("/receive", response_model=MovementResponse, status_code=201)
@@ -156,10 +133,15 @@ def adjust(movement: MovementCreate):
 
 
 # ============================================================================
-# Batch Routes
+# Batch Routes (specific paths BEFORE parameterized paths)
 # ============================================================================
 
-@router.post("/receive/batch", response_model=MovementBatchResponse)
+@router.post(
+    "/receive/batch",
+    response_model=MovementBatchResponse,
+    status_code=201,
+    responses={207: {"model": MovementBatchResponse, "description": "Partial success - some items failed"}}
+)
 def receive_batch(batch: MovementBatchRequest):
     """
     Record stock inflow for multiple variants.
@@ -210,7 +192,12 @@ def receive_batch(batch: MovementBatchRequest):
     return JSONResponse(status_code=201, content=response)
 
 
-@router.post("/issue/batch", response_model=MovementBatchResponse)
+@router.post(
+    "/issue/batch",
+    response_model=MovementBatchResponse,
+    status_code=201,
+    responses={207: {"model": MovementBatchResponse, "description": "Partial success - some items failed"}}
+)
 def issue_batch(batch: MovementBatchRequest):
     """
     Record stock outflow for multiple variants.
@@ -267,3 +254,30 @@ def issue_batch(batch: MovementBatchRequest):
 
     # Return 201 if all succeeded
     return JSONResponse(status_code=201, content=response)
+
+
+# ============================================================================
+# Parameterized Routes (AFTER specific paths to avoid path interception)
+# ============================================================================
+
+@router.post("/{movement_id}/cancel", response_model=CancelMovementResponse, status_code=200)
+def cancel_movement_route(
+    movement_id: int,
+    request: Optional[CancelMovementRequest] = Body(None),
+):
+    """
+    Cancel a movement (soft delete) and reverse its effect on stock balance.
+
+    Returns 200 on success, 400 if already cancelled, 404 if not found.
+    """
+    reason = request.reason if request else None
+
+    try:
+        result = repo.cancel_movement(movement_id, reason=reason)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Movement {movement_id} not found")
+
+    return result
