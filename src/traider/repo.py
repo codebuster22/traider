@@ -66,6 +66,7 @@ def update_fabric(
             # Check fabric exists
             cur.execute("SELECT id FROM fabrics WHERE id = %s", (fabric_id,))
             if not cur.fetchone():
+                conn.rollback()
                 return None
 
             # Build dynamic update query
@@ -90,7 +91,9 @@ def update_fabric(
                     "SELECT id, fabric_code, name, image_url, gallery FROM fabrics WHERE id = %(id)s",
                     params
                 )
-                return cur.fetchone()
+                result = cur.fetchone()
+                conn.rollback()
+                return result
 
             update_sql = f"UPDATE fabrics SET {', '.join(updates)} WHERE id = %(id)s RETURNING id, fabric_code, name, image_url, gallery"
             cur.execute(update_sql, params)
@@ -256,6 +259,7 @@ def create_variant_by_fabric_code(
             cur.execute("SELECT id FROM fabrics WHERE fabric_code = %s", (fabric_code,))
             fabric = cur.fetchone()
             if not fabric:
+                conn.rollback()
                 return None
 
             fabric_id = fabric["id"]
@@ -324,6 +328,7 @@ def update_variant(
             # Check variant exists
             cur.execute("SELECT id FROM fabric_variants WHERE id = %s", (variant_id,))
             if not cur.fetchone():
+                conn.rollback()
                 return None
 
             # Build dynamic update query
@@ -360,7 +365,9 @@ def update_variant(
                     "SELECT id, fabric_id, color_code, gsm, width, finish, image_url, gallery FROM fabric_variants WHERE id = %(id)s",
                     params
                 )
-                return cur.fetchone()
+                result = cur.fetchone()
+                conn.rollback()
+                return result
 
             update_sql = f"UPDATE fabric_variants SET {', '.join(updates)} WHERE id = %(id)s RETURNING id, fabric_id, color_code, gsm, width, finish, image_url, gallery"
             cur.execute(update_sql, params)
@@ -393,6 +400,7 @@ def update_variant_by_codes(
             )
             row = cur.fetchone()
             if not row:
+                conn.rollback()
                 return None
 
             variant_id = row["id"]
@@ -427,6 +435,7 @@ def update_variant_by_codes(
 
             if not updates:
                 # No updates provided, just return current variant detail
+                conn.rollback()
                 return get_variant_by_codes(fabric_code, color_code)
 
             update_sql = f"UPDATE fabric_variants SET {', '.join(updates)} WHERE id = %(id)s RETURNING id, fabric_id, color_code, gsm, width, finish, image_url, gallery"
@@ -664,8 +673,10 @@ def create_movement_by_codes(
             )
             row = cur.fetchone()
             if not row:
+                conn.rollback()
                 return None
             variant_id = row["id"]
+        conn.rollback()  # Clean up read-only transaction
 
     # Use existing function
     return create_movement(variant_id, movement_type, qty, uom, roll_count, document_id, reason)
@@ -700,6 +711,7 @@ def create_movement(
             # Check variant exists
             cur.execute("SELECT id FROM fabric_variants WHERE id = %s", (variant_id,))
             if not cur.fetchone():
+                conn.rollback()
                 return None
 
             # Insert movement
@@ -930,9 +942,11 @@ def cancel_movement(
             movement = cur.fetchone()
 
             if not movement:
+                conn.rollback()
                 return None
 
             if movement["is_cancelled"]:
+                conn.rollback()
                 raise ValueError(f"Movement {movement_id} is already cancelled")
 
             # Build new reason

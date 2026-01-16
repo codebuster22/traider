@@ -268,7 +268,9 @@ def run_migrations(conn: psycopg.Connection) -> None:
         # Check if already run
         cur.execute("SELECT 1 FROM migrations WHERE name = 'sanitize_codes_cleanup_v1'")
         if cur.fetchone():
-            return  # Already completed
+            conn.rollback()  # Clean up transaction before returning
+            _run_targeted_color_fixes(conn)
+            return
 
         logger.info("Running migration: sanitize_codes_cleanup_v1")
 
@@ -309,7 +311,8 @@ def _run_targeted_color_fixes(conn: psycopg.Connection) -> None:
         # Check if already run
         cur.execute("SELECT 1 FROM migrations WHERE name = 'targeted_color_fixes_v1'")
         if cur.fetchone():
-            return  # Already completed
+            conn.rollback()  # Clean up transaction before returning
+            return
 
         logger.info("Running migration: targeted_color_fixes_v1")
         fabric_id = 2  # PV_COZIRA_MUL
