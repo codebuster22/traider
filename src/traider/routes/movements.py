@@ -1,12 +1,72 @@
 """Routes for stock movements."""
-from fastapi import APIRouter, HTTPException
+from datetime import datetime
+from typing import Optional
+
+from fastapi import APIRouter, Body, HTTPException, Query
 from fastapi.responses import JSONResponse
 
-from traider.models import MovementCreate, MovementResponse, MovementBatchRequest, MovementBatchResponse
+from traider.models import (
+    MovementCreate,
+    MovementResponse,
+    MovementBatchRequest,
+    MovementBatchResponse,
+    MovementHistoryResponse,
+    CancelMovementRequest,
+    CancelMovementResponse,
+)
 from traider import repo
 
-router = APIRouter(tags=["movements"])
+router = APIRouter(prefix="/movements", tags=["movements"])
 
+
+# ============================================================================
+# Movement History
+# ============================================================================
+
+@router.get("", response_model=MovementHistoryResponse, status_code=200)
+def list_movements(
+    fabric_code: Optional[str] = Query(None, description="Filter by fabric code (exact match)"),
+    color_code: Optional[str] = Query(None, description="Filter by color code (exact match)"),
+    movement_type: Optional[str] = Query(None, description="Filter by type: RECEIPT, ISSUE, ADJUST"),
+    date_from: Optional[datetime] = Query(None, description="Movements on or after this date"),
+    date_to: Optional[datetime] = Query(None, description="Movements on or before this date"),
+    min_qty: Optional[float] = Query(None, description="Minimum absolute quantity in meters"),
+    max_qty: Optional[float] = Query(None, description="Maximum absolute quantity in meters"),
+    document_id: Optional[str] = Query(None, description="Filter by document reference"),
+    include_cancelled: bool = Query(False, description="Include cancelled movements"),
+    limit: int = Query(20, ge=1, le=100, description="Max results"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    sort_by: str = Query("ts", description="Sort field: ts, delta_qty_m, movement_type"),
+    sort_dir: str = Query("desc", description="Sort direction: asc, desc"),
+):
+    """Search movement history with optional filters, pagination, and sorting."""
+    items, total = repo.search_movements(
+        fabric_code=fabric_code,
+        color_code=color_code,
+        movement_type=movement_type,
+        date_from=date_from,
+        date_to=date_to,
+        min_qty=min_qty,
+        max_qty=max_qty,
+        document_id=document_id,
+        include_cancelled=include_cancelled,
+        limit=limit,
+        offset=offset,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+    )
+
+    return {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+# ============================================================================
+# Create Movements (specific paths BEFORE parameterized paths)
+# ============================================================================
 
 @router.post("/receive", response_model=MovementResponse, status_code=201)
 def receive(movement: MovementCreate):
@@ -73,10 +133,15 @@ def adjust(movement: MovementCreate):
 
 
 # ============================================================================
-# Batch Routes
+# Batch Routes (specific paths BEFORE parameterized paths)
 # ============================================================================
 
-@router.post("/receive/batch", response_model=MovementBatchResponse)
+@router.post(
+    "/receive/batch",
+    response_model=MovementBatchResponse,
+    status_code=201,
+    responses={207: {"model": MovementBatchResponse, "description": "Partial success - some items failed"}}
+)
 def receive_batch(batch: MovementBatchRequest):
     """
     Record stock inflow for multiple variants.
@@ -127,7 +192,12 @@ def receive_batch(batch: MovementBatchRequest):
     return JSONResponse(status_code=201, content=response)
 
 
-@router.post("/issue/batch", response_model=MovementBatchResponse)
+@router.post(
+    "/issue/batch",
+    response_model=MovementBatchResponse,
+    status_code=201,
+    responses={207: {"model": MovementBatchResponse, "description": "Partial success - some items failed"}}
+)
 def issue_batch(batch: MovementBatchRequest):
     """
     Record stock outflow for multiple variants.
@@ -184,3 +254,30 @@ def issue_batch(batch: MovementBatchRequest):
 
     # Return 201 if all succeeded
     return JSONResponse(status_code=201, content=response)
+
+
+# ============================================================================
+# Parameterized Routes (AFTER specific paths to avoid path interception)
+# ============================================================================
+
+@router.post("/{movement_id}/cancel", response_model=CancelMovementResponse, status_code=200)
+def cancel_movement_route(
+    movement_id: int,
+    request: Optional[CancelMovementRequest] = Body(None),
+):
+    """
+    Cancel a movement (soft delete) and reverse its effect on stock balance.
+
+    Returns 200 on success, 400 if already cancelled, 404 if not found.
+    """
+    reason = request.reason if request else None
+
+    try:
+        result = repo.cancel_movement(movement_id, reason=reason)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Movement {movement_id} not found")
+
+    return result

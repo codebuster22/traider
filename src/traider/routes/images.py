@@ -1,20 +1,11 @@
 """Routes for image uploads."""
-from typing import Optional
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
 
-from traider.models import ImageUploadResponse
+from traider.models import ImageUploadRequest, ImageUploadResponse
 from traider.cloudinary_utils import upload_image as cloudinary_upload
 
 
 router = APIRouter(prefix="/images", tags=["images"])
-
-
-class ImageUploadRequest(BaseModel):
-    """Request body for image upload."""
-    image_data: str
-    filename: Optional[str] = None
-    folder: str = "traider"
 
 
 @router.post("", response_model=ImageUploadResponse, status_code=201)

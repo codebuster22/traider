@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 
 from traider.db import init_db, close_db
 from traider.models import HealthResponse
-from traider.routes import fabrics, variants, movements, stock, search, images
+from traider.routes import fabrics, variants, movements, stock, search, images, query
 from traider.routes.mcp import mcp_asgi_app, startup_mcp, shutdown_mcp
 
 
@@ -35,6 +35,10 @@ openapi_tags = [
     {
         "name": "images",
         "description": "Image upload and management via Cloudinary",
+    },
+    {
+        "name": "query",
+        "description": "Natural language queries against inventory data",
     },
 ]
 
@@ -79,6 +83,7 @@ _app.include_router(movements.router)
 _app.include_router(stock.router)
 _app.include_router(search.router)
 _app.include_router(images.router)
+_app.include_router(query.router)
 
 
 @_app.get("/", response_model=HealthResponse)

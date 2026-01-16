@@ -3,6 +3,8 @@
 This module provides MCP (Model Context Protocol) tools via HTTP/SSE,
 allowing AI clients like Claude to connect via URL instead of stdio.
 """
+import json
+from datetime import datetime
 from typing import Any, Optional
 from decimal import Decimal
 
@@ -10,7 +12,7 @@ from mcp.server import Server
 from mcp.types import Tool, TextContent
 from pydantic import BaseModel, Field
 
-from traider import repo
+from traider import repo, query_engine
 from traider.cloudinary_utils import upload_image as cloudinary_upload
 
 
@@ -69,6 +71,8 @@ class SearchFabricsInput(BaseModel):
     name: Optional[str] = Field(None, description="Filter by name (partial match)")
     limit: int = Field(20, ge=1, le=100, description="Max results to return")
     offset: int = Field(0, ge=0, description="Number of results to skip")
+    sort_by: str = Field("fabric_code", description="Sort field: fabric_code, name")
+    sort_dir: str = Field("asc", description="Sort direction: asc or desc")
 
 
 class CreateVariantInput(BaseModel):
@@ -119,7 +123,7 @@ class SearchVariantsInput(BaseModel):
     in_stock_only: bool = Field(False, description="Only return variants with stock > 0")
     limit: int = Field(20, ge=1, le=100, description="Max results to return")
     offset: int = Field(0, ge=0, description="Number of results to skip")
-    sort_by: str = Field("color_code", description="Sort field: id, fabric_code, color_code, gsm, width")
+    sort_by: str = Field("id", description="Sort field: id, fabric_code, color_code, gsm, width")
     sort_dir: str = Field("asc", description="Sort direction: asc or desc")
 
 
@@ -185,6 +189,33 @@ class SearchVariantsBatchInput(BaseModel):
     fabric_code: str = Field(description="Fabric code to search within")
     color_codes: list[str] = Field(description="List of color codes to find")
     include_stock: bool = Field(False, description="Include stock balances")
+
+
+# Movement history and cancellation input schemas
+class SearchMovementsInput(BaseModel):
+    fabric_code: Optional[str] = Field(None, description="Filter by fabric code (exact match)")
+    color_code: Optional[str] = Field(None, description="Filter by color code (exact match)")
+    movement_type: Optional[str] = Field(None, description="Filter by type: RECEIPT, ISSUE, ADJUST")
+    date_from: Optional[datetime] = Field(None, description="Movements on or after this date")
+    date_to: Optional[datetime] = Field(None, description="Movements on or before this date")
+    min_qty: Optional[float] = Field(None, description="Minimum absolute quantity in meters")
+    max_qty: Optional[float] = Field(None, description="Maximum absolute quantity in meters")
+    document_id: Optional[str] = Field(None, description="Filter by document reference")
+    include_cancelled: bool = Field(False, description="Include cancelled movements")
+    limit: int = Field(20, ge=1, le=100, description="Max results to return")
+    offset: int = Field(0, ge=0, description="Number of results to skip")
+    sort_by: str = Field("ts", description="Sort field: ts, delta_qty_m, movement_type")
+    sort_dir: str = Field("desc", description="Sort direction: asc or desc")
+
+
+class CancelMovementInput(BaseModel):
+    movement_id: int = Field(description="ID of the movement to cancel")
+    reason: Optional[str] = Field(None, description="Reason for cancellation")
+
+
+class QueryDataInput(BaseModel):
+    """Input for natural language query tool."""
+    question: str = Field(..., description="Natural language question about inventory data")
 
 
 # ============================================================================
@@ -322,6 +353,22 @@ async def list_tools() -> list[Tool]:
             name="search_variants_batch",
             description="Search multiple variants by color codes within a fabric. Returns found variants and not found list.",
             inputSchema=SearchVariantsBatchInput.model_json_schema()
+        ),
+        # Movement history and cancellation
+        Tool(
+            name="search_movements",
+            description="Query movement history with filters, pagination, and sorting. Excludes cancelled movements by default.",
+            inputSchema=SearchMovementsInput.model_json_schema()
+        ),
+        Tool(
+            name="cancel_movement",
+            description="Cancel a movement (soft delete) and reverse its effect on stock balance. Returns error if already cancelled.",
+            inputSchema=CancelMovementInput.model_json_schema()
+        ),
+        Tool(
+            name="query_data",
+            description="Execute a natural language query against inventory data. Use for analytical questions like totals, aggregations, filtered lists, and time-based queries.",
+            inputSchema=QueryDataInput.model_json_schema()
         ),
     ]
 
@@ -498,7 +545,9 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 fabric_code=args.fabric_code,
                 name=args.name,
                 limit=args.limit,
-                offset=args.offset
+                offset=args.offset,
+                sort_by=args.sort_by,
+                sort_dir=args.sort_dir
             )
             result = {
                 "items": serialize_result(items),
@@ -923,6 +972,64 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 text=f"Batch search completed:\n"
                      f"Found: {len(found)}, Not found: {len(not_found)}\n"
                      f"Data: {serialize_result(result)}"
+            )]
+
+        # Movement history and cancellation
+        elif name == "search_movements":
+            args = SearchMovementsInput(**arguments)
+            items, total = repo.search_movements(
+                fabric_code=args.fabric_code,
+                color_code=args.color_code,
+                movement_type=args.movement_type,
+                date_from=args.date_from,
+                date_to=args.date_to,
+                min_qty=args.min_qty,
+                max_qty=args.max_qty,
+                document_id=args.document_id,
+                include_cancelled=args.include_cancelled,
+                limit=args.limit,
+                offset=args.offset,
+                sort_by=args.sort_by,
+                sort_dir=args.sort_dir
+            )
+            result = {
+                "items": serialize_result(items),
+                "total": total,
+                "limit": args.limit,
+                "offset": args.offset
+            }
+            return [TextContent(
+                type="text",
+                text=f"Found {total} movements:\n{result}"
+            )]
+
+        elif name == "cancel_movement":
+            args = CancelMovementInput(**arguments)
+            try:
+                result = repo.cancel_movement(args.movement_id, reason=args.reason)
+            except ValueError as e:
+                return [TextContent(
+                    type="text",
+                    text=f"Error: {str(e)}"
+                )]
+
+            if result is None:
+                return [TextContent(
+                    type="text",
+                    text=f"Error: Movement {args.movement_id} not found"
+                )]
+
+            return [TextContent(
+                type="text",
+                text=f"Movement cancelled successfully:\n{serialize_result(result)}"
+            )]
+
+        elif name == "query_data":
+            args = QueryDataInput(**arguments)
+            result = query_engine.query(args.question)
+            return [TextContent(
+                type="text",
+                text=json.dumps(result, default=str)
             )]
 
         else:

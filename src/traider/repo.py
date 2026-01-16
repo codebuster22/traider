@@ -1,4 +1,5 @@
 """Repository layer for database operations."""
+from datetime import datetime
 from typing import Optional
 from decimal import Decimal
 import json
@@ -65,6 +66,7 @@ def update_fabric(
             # Check fabric exists
             cur.execute("SELECT id FROM fabrics WHERE id = %s", (fabric_id,))
             if not cur.fetchone():
+                conn.rollback()
                 return None
 
             # Build dynamic update query
@@ -89,7 +91,9 @@ def update_fabric(
                     "SELECT id, fabric_code, name, image_url, gallery FROM fabrics WHERE id = %(id)s",
                     params
                 )
-                return cur.fetchone()
+                result = cur.fetchone()
+                conn.rollback()
+                return result
 
             update_sql = f"UPDATE fabrics SET {', '.join(updates)} WHERE id = %(id)s RETURNING id, fabric_code, name, image_url, gallery"
             cur.execute(update_sql, params)
@@ -255,6 +259,7 @@ def create_variant_by_fabric_code(
             cur.execute("SELECT id FROM fabrics WHERE fabric_code = %s", (fabric_code,))
             fabric = cur.fetchone()
             if not fabric:
+                conn.rollback()
                 return None
 
             fabric_id = fabric["id"]
@@ -323,6 +328,7 @@ def update_variant(
             # Check variant exists
             cur.execute("SELECT id FROM fabric_variants WHERE id = %s", (variant_id,))
             if not cur.fetchone():
+                conn.rollback()
                 return None
 
             # Build dynamic update query
@@ -359,7 +365,9 @@ def update_variant(
                     "SELECT id, fabric_id, color_code, gsm, width, finish, image_url, gallery FROM fabric_variants WHERE id = %(id)s",
                     params
                 )
-                return cur.fetchone()
+                result = cur.fetchone()
+                conn.rollback()
+                return result
 
             update_sql = f"UPDATE fabric_variants SET {', '.join(updates)} WHERE id = %(id)s RETURNING id, fabric_id, color_code, gsm, width, finish, image_url, gallery"
             cur.execute(update_sql, params)
@@ -392,6 +400,7 @@ def update_variant_by_codes(
             )
             row = cur.fetchone()
             if not row:
+                conn.rollback()
                 return None
 
             variant_id = row["id"]
@@ -426,6 +435,7 @@ def update_variant_by_codes(
 
             if not updates:
                 # No updates provided, just return current variant detail
+                conn.rollback()
                 return get_variant_by_codes(fabric_code, color_code)
 
             update_sql = f"UPDATE fabric_variants SET {', '.join(updates)} WHERE id = %(id)s RETURNING id, fabric_id, color_code, gsm, width, finish, image_url, gallery"
@@ -663,8 +673,10 @@ def create_movement_by_codes(
             )
             row = cur.fetchone()
             if not row:
+                conn.rollback()
                 return None
             variant_id = row["id"]
+        conn.rollback()  # Clean up read-only transaction
 
     # Use existing function
     return create_movement(variant_id, movement_type, qty, uom, roll_count, document_id, reason)
@@ -699,6 +711,7 @@ def create_movement(
             # Check variant exists
             cur.execute("SELECT id FROM fabric_variants WHERE id = %s", (variant_id,))
             if not cur.fetchone():
+                conn.rollback()
                 return None
 
             # Insert movement
@@ -756,6 +769,234 @@ def create_movement(
             "movement_type": movement_type,
             "delta_qty_m": float(delta_qty_m),
             "on_hand_m_after": float(on_hand_m_after)
+        }
+
+
+def search_movements(
+    fabric_code: Optional[str] = None,
+    color_code: Optional[str] = None,
+    movement_type: Optional[str] = None,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    min_qty: Optional[float] = None,
+    max_qty: Optional[float] = None,
+    document_id: Optional[str] = None,
+    include_cancelled: bool = False,
+    limit: int = 20,
+    offset: int = 0,
+    sort_by: str = "ts",
+    sort_dir: str = "desc"
+) -> tuple[list[dict], int]:
+    """
+    Search movement history with optional filters and pagination.
+
+    Args:
+        fabric_code: Filter by fabric code (exact match)
+        color_code: Filter by color code (exact match)
+        movement_type: Filter by type: RECEIPT, ISSUE, ADJUST
+        date_from: Movements on or after this date
+        date_to: Movements on or before this date
+        min_qty: Minimum absolute quantity (filters on ABS(delta_qty_m))
+        max_qty: Maximum absolute quantity (filters on ABS(delta_qty_m))
+        document_id: Filter by document reference
+        include_cancelled: Include cancelled movements (default: false)
+        limit: Max results (default: 20)
+        offset: Pagination offset
+        sort_by: Sort field: ts, delta_qty_m, movement_type
+        sort_dir: Sort direction: asc, desc
+
+    Returns:
+        (items, total)
+    """
+    where_clauses = []
+    params = {}
+
+    # By default exclude cancelled movements
+    if not include_cancelled:
+        where_clauses.append("m.is_cancelled = FALSE")
+
+    if fabric_code:
+        where_clauses.append("f.fabric_code = %(fabric_code)s")
+        params["fabric_code"] = fabric_code
+
+    if color_code:
+        where_clauses.append("v.color_code = %(color_code)s")
+        params["color_code"] = color_code
+
+    if movement_type:
+        where_clauses.append("m.movement_type = %(movement_type)s")
+        params["movement_type"] = movement_type
+
+    if date_from:
+        where_clauses.append("m.ts >= %(date_from)s")
+        params["date_from"] = date_from
+
+    if date_to:
+        where_clauses.append("m.ts <= %(date_to)s")
+        params["date_to"] = date_to
+
+    if min_qty is not None:
+        where_clauses.append("ABS(m.delta_qty_m) >= %(min_qty)s")
+        params["min_qty"] = min_qty
+
+    if max_qty is not None:
+        where_clauses.append("ABS(m.delta_qty_m) <= %(max_qty)s")
+        params["max_qty"] = max_qty
+
+    if document_id:
+        where_clauses.append("m.document_id = %(document_id)s")
+        params["document_id"] = document_id
+
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+    # Validate and map sort fields
+    allowed_sort = {"ts", "delta_qty_m", "movement_type"}
+    if sort_by not in allowed_sort:
+        sort_by = "ts"
+    if sort_dir.lower() not in {"asc", "desc"}:
+        sort_dir = "desc"
+
+    sort_map = {
+        "ts": "m.ts",
+        "delta_qty_m": "m.delta_qty_m",
+        "movement_type": "m.movement_type"
+    }
+    sort_col = sort_map[sort_by]
+
+    params["limit"] = limit
+    params["offset"] = offset
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # Get total count
+            cur.execute(
+                f"""
+                SELECT COUNT(*) as count
+                FROM stock_movements m
+                JOIN fabric_variants v ON m.variant_id = v.id
+                JOIN fabrics f ON v.fabric_id = f.id
+                {where_sql}
+                """,
+                params
+            )
+            total = cur.fetchone()["count"]
+
+            # Get items
+            cur.execute(
+                f"""
+                SELECT
+                    m.id,
+                    m.ts,
+                    f.fabric_code,
+                    v.color_code,
+                    m.movement_type,
+                    m.delta_qty_m,
+                    m.original_qty,
+                    m.original_uom,
+                    m.roll_count,
+                    m.document_id,
+                    m.reason,
+                    m.is_cancelled,
+                    m.cancelled_at,
+                    m.created_at
+                FROM stock_movements m
+                JOIN fabric_variants v ON m.variant_id = v.id
+                JOIN fabrics f ON v.fabric_id = f.id
+                {where_sql}
+                ORDER BY {sort_col} {sort_dir}
+                LIMIT %(limit)s OFFSET %(offset)s
+                """,
+                params
+            )
+            items = [dict(row) for row in cur.fetchall()]
+
+    return items, total
+
+
+def cancel_movement(
+    movement_id: int,
+    reason: Optional[str] = None
+) -> Optional[dict]:
+    """
+    Cancel a movement and reverse its effect on stock balance.
+
+    Args:
+        movement_id: The ID of the movement to cancel
+        reason: Optional cancellation reason (appended to existing reason)
+
+    Returns:
+        Dict with cancellation details, or None if movement not found.
+        Raises ValueError if movement is already cancelled.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # Get movement details
+            cur.execute(
+                """
+                SELECT m.id, m.variant_id, m.delta_qty_m, m.roll_count, m.is_cancelled, m.reason
+                FROM stock_movements m
+                WHERE m.id = %s
+                """,
+                (movement_id,)
+            )
+            movement = cur.fetchone()
+
+            if not movement:
+                conn.rollback()
+                return None
+
+            if movement["is_cancelled"]:
+                conn.rollback()
+                raise ValueError(f"Movement {movement_id} is already cancelled")
+
+            # Build new reason
+            old_reason = movement["reason"] or ""
+            if reason:
+                new_reason = f"{old_reason} [CANCELLED: {reason}]".strip()
+            else:
+                new_reason = f"{old_reason} [CANCELLED]".strip()
+
+            # Mark as cancelled
+            cur.execute(
+                """
+                UPDATE stock_movements
+                SET is_cancelled = TRUE, cancelled_at = now(), reason = %s
+                WHERE id = %s
+                RETURNING cancelled_at
+                """,
+                (new_reason, movement_id)
+            )
+            cancelled_at = cur.fetchone()["cancelled_at"]
+
+            # Reverse the stock balance
+            delta_qty_m = movement["delta_qty_m"]
+            roll_count = movement["roll_count"]
+            variant_id = movement["variant_id"]
+
+            # Subtract the original delta (reverse the effect)
+            cur.execute(
+                """
+                UPDATE stock_balances
+                SET
+                    on_hand_m = on_hand_m - %(delta_qty_m)s,
+                    on_hand_rolls = on_hand_rolls - COALESCE(%(roll_count)s, 0),
+                    updated_at = now()
+                WHERE variant_id = %(variant_id)s
+                RETURNING on_hand_m
+                """,
+                {"variant_id": variant_id, "delta_qty_m": delta_qty_m, "roll_count": roll_count}
+            )
+            balance_row = cur.fetchone()
+            new_balance_m = float(balance_row["on_hand_m"]) if balance_row else 0.0
+
+        conn.commit()
+
+        return {
+            "message": f"Movement {movement_id} cancelled",
+            "movement_id": movement_id,
+            "reversed_qty_m": -float(delta_qty_m),
+            "new_balance_m": new_balance_m,
+            "cancelled_at": cancelled_at
         }
 
 

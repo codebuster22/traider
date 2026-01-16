@@ -133,6 +133,50 @@ class MovementResponse(BaseModel):
     on_hand_m_after: float
 
 
+# --- Movement History ---
+
+class MovementHistoryItem(BaseModel):
+    """Single movement record with fabric/color details."""
+    id: int
+    ts: datetime
+    fabric_code: str
+    color_code: str
+    movement_type: str
+    delta_qty_m: float
+    original_qty: float
+    original_uom: str
+    roll_count: Optional[int] = None
+    document_id: Optional[str] = None
+    reason: Optional[str] = None
+    is_cancelled: bool
+    cancelled_at: Optional[datetime] = None
+    created_at: datetime
+
+
+class MovementHistoryResponse(BaseModel):
+    """Paginated movement history response."""
+    items: list[MovementHistoryItem]
+    total: int
+    limit: int
+    offset: int
+
+
+# --- Cancel Movement ---
+
+class CancelMovementRequest(BaseModel):
+    """Request to cancel a movement."""
+    reason: Optional[str] = None
+
+
+class CancelMovementResponse(BaseModel):
+    """Response after cancelling a movement."""
+    message: str
+    movement_id: int
+    reversed_qty_m: float
+    new_balance_m: float
+    cancelled_at: datetime
+
+
 # ============================================================================
 # Stock
 # ============================================================================
@@ -356,8 +400,44 @@ class HealthResponse(BaseModel):
     service: str
 
 
+class ImageUploadRequest(BaseModel):
+    """Request body for image upload."""
+    image_data: str
+    filename: Optional[str] = None
+    folder: str = "traider"
+
+
 class ImageUploadResponse(BaseModel):
     """Response from image upload endpoint."""
     url: str
     secure_url: str
     public_id: str
+
+
+# ============================================================================
+# Natural Language Query
+# ============================================================================
+
+class QueryRequest(BaseModel):
+    """Request body for natural language query."""
+    question: str = Field(..., min_length=1, max_length=1000)
+
+
+class QuerySummary(BaseModel):
+    """Summary of query results."""
+    description: str
+    row_count: int
+
+
+class QueryErrorDetail(BaseModel):
+    """Error details for failed queries."""
+    code: Literal["INVALID_QUERY", "UNSAFE_QUERY", "NO_RESULTS", "TIMEOUT", "INTERNAL_ERROR"]
+    message: str
+
+
+class QueryResponse(BaseModel):
+    """Response from natural language query endpoint."""
+    success: bool
+    data: Optional[list[dict]] = None
+    summary: Optional[QuerySummary] = None
+    error: Optional[QueryErrorDetail] = None
