@@ -1,10 +1,14 @@
 """Database connection and initialization."""
+import logging
 import os
+import re
 from contextlib import contextmanager
 from typing import Generator
 import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
+
+logger = logging.getLogger(__name__)
 
 # Get database URL from environment
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://localhost:5432/inventory")
@@ -98,11 +102,200 @@ ALTER TABLE stock_movements
 -- Migration: Add roll tracking to stock balances
 ALTER TABLE stock_balances
   ADD COLUMN IF NOT EXISTS on_hand_rolls NUMERIC(14,3) DEFAULT 0;
+
+-- Migration: Add soft delete columns for movements
+ALTER TABLE stock_movements
+  ADD COLUMN IF NOT EXISTS is_cancelled BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE stock_movements
+  ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ NULL;
+
+-- Migration tracking table
+CREATE TABLE IF NOT EXISTS migrations (
+  name TEXT PRIMARY KEY,
+  completed_at TIMESTAMPTZ DEFAULT now()
+);
 """
 
 
+# --------------------------------------------------------------------------
+# Data Sanitization Functions
+# --------------------------------------------------------------------------
+
+def sanitize_fabric_code(code: str) -> str:
+    """Sanitize fabric_code: UPPERCASE, underscores, alphanumeric only.
+
+    Steps:
+    1. Convert to UPPERCASE
+    2. Replace whitespace and dashes with underscore (_)
+    3. Remove all characters except A-Z, 0-9, _
+    4. Collapse multiple underscores (__ → _)
+    5. Trim leading/trailing underscores
+    """
+    result = code.upper()
+    result = re.sub(r'[\s\-]+', '_', result)
+    result = re.sub(r'[^A-Z0-9_]', '', result)
+    result = re.sub(r'_+', '_', result)
+    result = result.strip('_')
+    return result
+
+
+def sanitize_color_code(code: str) -> str:
+    """Sanitize color_code: UPPERCASE, alphanumeric only.
+
+    Steps:
+    1. Convert to UPPERCASE
+    2. Remove ALL characters except A-Z, 0-9
+    """
+    result = code.upper()
+    result = re.sub(r'[^A-Z0-9]', '', result)
+    return result
+
+
+def _sanitize_fabric_codes(cur: psycopg.Cursor) -> int:
+    """Sanitize all fabric codes. Returns count of updated fabrics."""
+    cur.execute("SELECT id, fabric_code FROM fabrics")
+    fabrics = cur.fetchall()
+
+    updated = 0
+    conflicts = []
+
+    for fabric in fabrics:
+        old_code = fabric['fabric_code']
+        new_code = sanitize_fabric_code(old_code)
+
+        if new_code == old_code:
+            continue  # No change needed
+
+        # Check for conflict
+        cur.execute("SELECT 1 FROM fabrics WHERE fabric_code = %s AND id != %s", (new_code, fabric['id']))
+        if cur.fetchone():
+            conflicts.append(f"{old_code} → {new_code}")
+            continue
+
+        # Update fabric code
+        cur.execute("UPDATE fabrics SET fabric_code = %s WHERE id = %s", (new_code, fabric['id']))
+        logger.info(f"Sanitized fabric code: {old_code} → {new_code}")
+        updated += 1
+
+    if conflicts:
+        logger.warning(f"Fabric code conflicts (skipped): {conflicts}")
+
+    return updated
+
+
+def _sanitize_color_codes(cur: psycopg.Cursor) -> int:
+    """Sanitize all color codes. Returns count of updated variants."""
+    cur.execute("""
+        SELECT v.id, v.fabric_id, v.color_code, f.fabric_code
+        FROM fabric_variants v
+        JOIN fabrics f ON f.id = v.fabric_id
+    """)
+    variants = cur.fetchall()
+
+    updated = 0
+    conflicts = []
+
+    for variant in variants:
+        old_code = variant['color_code']
+        new_code = sanitize_color_code(old_code)
+
+        if new_code == old_code:
+            continue  # No change needed
+
+        # Check for conflict within same fabric
+        cur.execute(
+            "SELECT 1 FROM fabric_variants WHERE fabric_id = %s AND color_code = %s AND id != %s",
+            (variant['fabric_id'], new_code, variant['id'])
+        )
+        if cur.fetchone():
+            conflicts.append(f"{variant['fabric_code']}/{old_code} → {new_code}")
+            continue
+
+        # Update color code
+        cur.execute("UPDATE fabric_variants SET color_code = %s WHERE id = %s", (new_code, variant['id']))
+        logger.info(f"Sanitized color code: {variant['fabric_code']}/{old_code} → {new_code}")
+        updated += 1
+
+    if conflicts:
+        logger.warning(f"Color code conflicts (skipped): {conflicts}")
+
+    return updated
+
+
+def _delete_corrupted_movements(cur: psycopg.Cursor) -> int:
+    """Delete all movements from January 15, 2026. Returns count deleted."""
+    cur.execute("""
+        DELETE FROM stock_movements
+        WHERE created_at::date = '2026-01-15'
+        RETURNING id
+    """)
+    deleted = cur.rowcount
+    if deleted > 0:
+        logger.info(f"Deleted {deleted} corrupted movements from 2026-01-15")
+    return deleted
+
+
+def _recalculate_balances(cur: psycopg.Cursor) -> None:
+    """Recalculate all stock balances from non-cancelled movements."""
+    # Reset all balances to zero
+    cur.execute("UPDATE stock_balances SET on_hand_m = 0, on_hand_rolls = 0, updated_at = now()")
+
+    # Recalculate from non-cancelled movements
+    cur.execute("""
+        UPDATE stock_balances sb
+        SET
+            on_hand_m = COALESCE(agg.total_m, 0),
+            on_hand_rolls = COALESCE(agg.total_rolls, 0),
+            updated_at = now()
+        FROM (
+            SELECT
+                variant_id,
+                SUM(delta_qty_m) as total_m,
+                SUM(COALESCE(roll_count, 0)) as total_rolls
+            FROM stock_movements
+            WHERE is_cancelled = FALSE
+            GROUP BY variant_id
+        ) agg
+        WHERE sb.variant_id = agg.variant_id
+    """)
+    logger.info("Recalculated all stock balances from movements")
+
+
+def run_migrations(conn: psycopg.Connection) -> None:
+    """Run one-time data migrations."""
+    with conn.cursor() as cur:
+        # Check if already run
+        cur.execute("SELECT 1 FROM migrations WHERE name = 'sanitize_codes_cleanup_v1'")
+        if cur.fetchone():
+            return  # Already completed
+
+        logger.info("Running migration: sanitize_codes_cleanup_v1")
+
+        # Part A: Sanitize fabric codes
+        fabric_count = _sanitize_fabric_codes(cur)
+        logger.info(f"Part A complete: {fabric_count} fabric codes sanitized")
+
+        # Part B: Sanitize color codes
+        color_count = _sanitize_color_codes(cur)
+        logger.info(f"Part B complete: {color_count} color codes sanitized")
+
+        # Part C: Delete corrupted movements
+        deleted_count = _delete_corrupted_movements(cur)
+        logger.info(f"Part C complete: {deleted_count} movements deleted")
+
+        # Part D: Recalculate balances
+        _recalculate_balances(cur)
+        logger.info("Part D complete: balances recalculated")
+
+        # Mark complete
+        cur.execute("INSERT INTO migrations (name) VALUES ('sanitize_codes_cleanup_v1')")
+        conn.commit()
+        logger.info("Migration sanitize_codes_cleanup_v1 completed successfully")
+
+
 def init_db() -> None:
-    """Initialize database: create tables and indexes."""
+    """Initialize database: create tables and indexes, run migrations."""
     global _pool
 
     # Create connection pool
@@ -118,6 +311,9 @@ def init_db() -> None:
         with conn.cursor() as cur:
             cur.execute(DDL)
         conn.commit()
+
+        # Run data migrations
+        run_migrations(conn)
 
 
 def close_db() -> None:
