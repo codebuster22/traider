@@ -66,6 +66,11 @@ Rules:
 4. For aggregations, include COUNT or SUM as appropriate
 5. Default to ordering by the most relevant column
 6. If the question cannot be answered with the available data, respond with ERROR: <reason>
+7. DATE FILTERING: When filtering by date ranges on timestamp columns (ts, created_at):
+   - For "from X to Y" where X and Y are different dates: use ts >= 'X' AND ts < 'Y+1day'
+   - For "from X to X" (same date) or "on date X": use ts >= 'X' AND ts < 'X+1day' to include the ENTIRE day
+   - NEVER use ts < 'X' when X is the start date - this returns nothing
+   - Example: "from 2026-01-17 to 2026-01-17" means the entire day, so use: ts >= '2026-01-17' AND ts < '2026-01-18'
 
 User Question: {question}
 
@@ -87,6 +92,9 @@ Response: SELECT fv.id as variant_id, f.id as fabric_id, f.fabric_code, fv.color
 
 Question: "Show all receipts from the last 7 days"
 Response: SELECT sm.id as movement_id, fv.id as variant_id, f.id as fabric_id, f.fabric_code, fv.color_code, sm.delta_qty_m, sm.roll_count, sm.document_id, sm.ts FROM stock_movements sm JOIN fabric_variants fv ON fv.id = sm.variant_id JOIN fabrics f ON f.id = fv.fabric_id WHERE sm.movement_type = 'RECEIPT' AND sm.is_cancelled = FALSE AND sm.ts >= NOW() - INTERVAL '7 days' ORDER BY sm.ts DESC|Stock receipts from the last 7 days
+
+Question: "List all stock movements from 2026-01-17 to 2026-01-17"
+Response: SELECT sm.id as movement_id, fv.id as variant_id, f.id as fabric_id, f.fabric_code, fv.color_code, sm.movement_type, sm.delta_qty_m, sm.roll_count, sm.document_id, sm.ts FROM stock_movements sm JOIN fabric_variants fv ON fv.id = sm.variant_id JOIN fabrics f ON f.id = fv.fabric_id WHERE sm.is_cancelled = FALSE AND sm.ts >= '2026-01-17' AND sm.ts < '2026-01-18' ORDER BY sm.ts DESC|Stock movements for January 17, 2026
 
 Question: "Which fabrics have no stock?"
 Response: SELECT f.id as fabric_id, f.fabric_code, f.name FROM fabrics f WHERE NOT EXISTS (SELECT 1 FROM fabric_variants fv JOIN stock_balances sb ON fv.id = sb.variant_id WHERE fv.fabric_id = f.id AND sb.on_hand_m > 0) ORDER BY f.fabric_code|Fabrics with zero stock across all variants"""
