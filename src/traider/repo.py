@@ -590,7 +590,8 @@ def search_variants(
 
     if q:
         where_clauses.append(
-            "(v.color_code ILIKE %(q)s OR v.finish ILIKE %(q)s OR f.fabric_code ILIKE %(q)s OR f.name ILIKE %(q)s)"
+            "(v.color_code ILIKE %(q)s OR v.finish ILIKE %(q)s OR f.fabric_code ILIKE %(q)s OR f.name ILIKE %(q)s"
+            " OR EXISTS (SELECT 1 FROM variant_aliases va WHERE va.variant_id = v.id AND va.alias ILIKE %(q)s))"
         )
         params["q"] = f"%{q}%"
 
@@ -603,7 +604,10 @@ def search_variants(
         params["fabric_code"] = f"%{fabric_code}%"
 
     if color_code:
-        where_clauses.append("v.color_code ILIKE %(color_code)s")
+        where_clauses.append(
+            "(v.color_code ILIKE %(color_code)s"
+            " OR EXISTS (SELECT 1 FROM variant_aliases va WHERE va.variant_id = v.id AND va.alias ILIKE %(color_code)s))"
+        )
         params["color_code"] = f"%{color_code}%"
 
     if gsm:
@@ -878,7 +882,10 @@ def search_movements(
         params["fabric_code"] = fabric_code
 
     if color_code:
-        where_clauses.append("v.color_code = %(color_code)s")
+        where_clauses.append(
+            "(v.color_code = %(color_code)s"
+            " OR EXISTS (SELECT 1 FROM variant_aliases va WHERE va.variant_id = v.id AND va.alias = %(color_code)s))"
+        )
         params["color_code"] = color_code
 
     if movement_type:
@@ -1265,7 +1272,10 @@ def unified_search(
                     JOIN fabrics f ON v.fabric_id = f.id
                     LEFT JOIN fabric_aliases fa ON f.id = fa.fabric_id
                     {stock_join}
-                    WHERE v.color_code ILIKE %(q)s
+                    WHERE (
+                           v.color_code ILIKE %(q)s
+                           OR EXISTS (SELECT 1 FROM variant_aliases va WHERE va.variant_id = v.id AND va.alias ILIKE %(q)s)
+                          )
                        OR v.finish ILIKE %(q)s
                        OR f.fabric_code ILIKE %(q)s
                        OR f.name ILIKE %(q)s
@@ -1480,100 +1490,47 @@ def create_movements_batch(
 def search_variants_batch(
     fabric_code: str,
     color_codes: list[str],
-    include_stock: bool = False
+    include_stock: bool = False,
 ) -> tuple[Optional[int], list[dict], list[str]]:
-    """
-    Search multiple variants by color codes within a fabric.
+    """Search multiple variants by color codes (alias-aware) within a fabric.
 
-    Args:
-        fabric_code: The fabric code to search within
-        color_codes: List of color codes to find
-        include_stock: Whether to include stock balances
+    Each item in `found` echoes the input code as `item["color_code"]` and
+    the resolved variant's primary as `item["variant"]["color_code"]`.
 
     Returns:
-        (fabric_id, found_list, not_found_list) or (None, [], []) if fabric not found
+        (fabric_id, found_list, not_found_list) or (None, [], color_codes) if fabric not found
     """
     if not color_codes:
-        return None, [], []
+        return (None, [], [])
 
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            # Get fabric by code
-            cur.execute("SELECT id FROM fabrics WHERE fabric_code = %s", (fabric_code,))
-            fabric = cur.fetchone()
-            if not fabric:
-                return None, [], color_codes
+    fabric = get_fabric_by_code(fabric_code)
+    if fabric is None:
+        return (None, [], list(color_codes))
 
-            fabric_id = fabric["id"]
+    found: list[dict] = []
+    not_found: list[str] = []
+    for code in color_codes:
+        variant_id = resolve_variant_id(fabric_code, code)
+        if variant_id is None:
+            not_found.append(code)
+            continue
+        variant = get_variant_detail(variant_id)
+        if variant is None:
+            not_found.append(code)
+            continue
 
-            # Build query
-            stock_join = "LEFT JOIN stock_balances sb ON v.id = sb.variant_id" if include_stock else ""
-            stock_fields = ", sb.on_hand_m, sb.on_hand_rolls, sb.updated_at" if include_stock else ""
+        stock = None
+        if include_stock:
+            bal = get_stock_balance(variant_id, uom="m")
+            stock = {
+                "balance": float(bal["on_hand_m"]) if bal else 0.0,
+                "uom": "m",
+            }
 
-            cur.execute(
-                f"""
-                SELECT
-                    v.id,
-                    v.fabric_id,
-                    f.fabric_code,
-                    f.name as fabric_name,
-                    f.image_url as fabric_image_url,
-                    f.gallery as fabric_gallery,
-                    v.color_code,
-                    v.gsm,
-                    v.width,
-                    v.finish,
-                    v.image_url as variant_image_url,
-                    v.gallery as variant_gallery
-                    {stock_fields}
-                FROM fabric_variants v
-                JOIN fabrics f ON v.fabric_id = f.id
-                {stock_join}
-                WHERE f.id = %s AND v.color_code = ANY(%s)
-                """,
-                (fabric_id, color_codes)
-            )
-            rows = cur.fetchall()
+        found.append({
+            "color_code": code,      # echoes the input (may be primary OR alias)
+            "variant": variant,      # resolved variant, whose color_code is the primary
+            "stock": stock,
+        })
 
-            # Build found list and track which were found
-            found = []
-            found_codes = set()
-
-            for row in rows:
-                row_dict = dict(row)
-                color_code = row_dict["color_code"]
-                found_codes.add(color_code)
-
-                # Build variant info
-                variant = {
-                    "id": row_dict["id"],
-                    "fabric_id": row_dict["fabric_id"],
-                    "fabric_code": row_dict["fabric_code"],
-                    "fabric_name": row_dict["fabric_name"],
-                    "fabric_image_url": row_dict.get("fabric_image_url"),
-                    "fabric_gallery": row_dict.get("fabric_gallery", {}),
-                    "color_code": color_code,
-                    "finish": row_dict["finish"],
-                    "gsm": row_dict.get("gsm"),
-                    "width": row_dict.get("width"),
-                    "variant_image_url": row_dict.get("variant_image_url"),
-                    "variant_gallery": row_dict.get("variant_gallery", {})
-                }
-
-                stock = None
-                if include_stock:
-                    stock = {
-                        "balance": float(row_dict.get("on_hand_m") or 0),
-                        "uom": "m"
-                    }
-
-                found.append({
-                    "color_code": color_code,
-                    "variant": variant,
-                    "stock": stock
-                })
-
-            # Determine not found
-            not_found = [cc for cc in color_codes if cc not in found_codes]
-
-    return fabric_id, found, not_found
+    return (fabric["id"], found, not_found)
