@@ -483,3 +483,53 @@ class LinkConfirmationRequired(BaseModel):
     status: Literal["confirmation_required"] = "confirmation_required"
     plan: LinkConfirmationPlan
     message: str
+
+
+# ============================================================================
+# Reconcile
+# ============================================================================
+
+class ReconcileValidationError(BaseModel):
+    row: int
+    column: Optional[str] = None
+    code: str
+    message: str
+    value: Optional[str] = None
+
+
+class ReconcileConflictItem(BaseModel):
+    code: str
+    row: int
+    fabric_code: str
+    color_code: str
+    existing_variant_primary: Optional[str] = None
+    remediation: str
+    message: str
+
+
+class ReconcileSummaryModel(BaseModel):
+    fabrics_created: int
+    fabrics_touched: int
+    variants_created: int
+    variants_adjusted: int
+    variants_already_balanced: int
+    aliases_created: int
+    movements_posted: int
+    total_delta_m: float
+
+
+class ReconcileSuccessResponse(BaseModel):
+    status: Literal["ok"] = "ok"
+    batch_id: str
+    summary: ReconcileSummaryModel
+    actions: list[dict]
+
+
+class ReconcileValidationFailedResponse(BaseModel):
+    status: Literal["validation_failed"] = "validation_failed"
+    errors: list[ReconcileValidationError]
+
+
+class ReconcileConflictResponse(BaseModel):
+    status: Literal["conflict"] = "conflict"
+    conflicts: list[ReconcileConflictItem]
