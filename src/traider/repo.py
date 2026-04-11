@@ -7,6 +7,75 @@ from traider.db import get_conn
 
 
 # ============================================================================
+# Variant ID Resolution
+# ============================================================================
+
+def _resolve_variant_id_on_cursor(
+    cur,
+    fabric_code: str,
+    code_or_alias: str,
+) -> Optional[int]:
+    """Resolve a primary color_code OR an alias using the caller's cursor.
+
+    Use this from within any function that already holds a transaction — it
+    reads the caller's pending writes, which the public wrapper (which opens
+    its own pool connection) cannot.
+    """
+    cur.execute(
+        """
+        SELECT v.id
+          FROM fabric_variants v
+          JOIN fabrics f ON v.fabric_id = f.id
+         WHERE f.fabric_code = %s AND v.color_code = %s
+        """,
+        (fabric_code, code_or_alias),
+    )
+    row = cur.fetchone()
+    if row:
+        return row["id"]
+    cur.execute(
+        """
+        SELECT va.variant_id
+          FROM variant_aliases va
+          JOIN fabrics f ON va.fabric_id = f.id
+         WHERE f.fabric_code = %s AND va.alias = %s
+        """,
+        (fabric_code, code_or_alias),
+    )
+    row = cur.fetchone()
+    return row["variant_id"] if row else None
+
+
+def resolve_variant_id(fabric_code: str, code_or_alias: str) -> Optional[int]:
+    """Resolve a primary color_code OR an alias to a variant_id within a fabric.
+
+    Single source of truth for fabric_code + color-string → variant_id resolution
+    when the caller does not already have an open transaction.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            return _resolve_variant_id_on_cursor(cur, fabric_code, code_or_alias)
+
+
+def add_variant_alias_direct(fabric_id: int, variant_id: int, alias: str) -> bool:
+    """Insert a row into variant_aliases. Minimal version — A.3 hardens with invariants."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO variant_aliases (fabric_id, variant_id, alias)
+                VALUES (%s, %s, %s)
+                ON CONFLICT DO NOTHING
+                RETURNING fabric_id
+                """,
+                (fabric_id, variant_id, alias),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    return row is not None
+
+
+# ============================================================================
 # Fabrics
 # ============================================================================
 
