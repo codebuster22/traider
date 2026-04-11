@@ -45,6 +45,13 @@ CREATE TABLE IF NOT EXISTS fabric_variants (
   UNIQUE (fabric_id, color_code)
 );
 
+CREATE TABLE IF NOT EXISTS variant_aliases (
+  fabric_id  BIGINT NOT NULL REFERENCES fabrics(id) ON DELETE CASCADE,
+  variant_id BIGINT NOT NULL REFERENCES fabric_variants(id) ON DELETE CASCADE,
+  alias      TEXT   NOT NULL,
+  PRIMARY KEY (fabric_id, alias)
+);
+
 -- Source of truth for changes (always meters)
 CREATE TABLE IF NOT EXISTS stock_movements (
   id BIGSERIAL PRIMARY KEY,
@@ -84,6 +91,10 @@ CREATE INDEX IF NOT EXISTS idx_variants_width
   ON fabric_variants (width);
 CREATE INDEX IF NOT EXISTS idx_movements_variant_ts
   ON stock_movements (variant_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_variant_aliases_variant
+  ON variant_aliases (variant_id);
+CREATE INDEX IF NOT EXISTS idx_variant_aliases_trgm
+  ON variant_aliases USING gin (alias gin_trgm_ops);
 
 -- Migration: Add gallery column for structured image galleries
 ALTER TABLE fabrics
@@ -269,6 +280,12 @@ def run_migrations(conn: psycopg.Connection) -> None:
         cur.execute("SELECT 1 FROM migrations WHERE name = 'sanitize_codes_cleanup_v1'")
         if cur.fetchone():
             conn.rollback()  # Clean up transaction before returning
+            # Still check variant_aliases_v1 even if earlier migration already ran
+            cur.execute("SELECT 1 FROM migrations WHERE name = 'variant_aliases_v1'")
+            if not cur.fetchone():
+                cur.execute("INSERT INTO migrations (name) VALUES ('variant_aliases_v1')")
+                conn.commit()
+                logger.info("Migration variant_aliases_v1 recorded")
             _run_targeted_color_fixes(conn)
             return
 
@@ -294,6 +311,14 @@ def run_migrations(conn: psycopg.Connection) -> None:
         cur.execute("INSERT INTO migrations (name) VALUES ('sanitize_codes_cleanup_v1')")
         conn.commit()
         logger.info("Migration sanitize_codes_cleanup_v1 completed successfully")
+
+    # Mark variant_aliases_v1 as complete (idempotent — table is created by DDL)
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM migrations WHERE name = 'variant_aliases_v1'")
+        if not cur.fetchone():
+            cur.execute("INSERT INTO migrations (name) VALUES ('variant_aliases_v1')")
+            conn.commit()
+            logger.info("Migration variant_aliases_v1 recorded")
 
     # Run targeted color code fixes
     _run_targeted_color_fixes(conn)
