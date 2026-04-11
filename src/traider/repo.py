@@ -405,7 +405,10 @@ def create_variant_by_fabric_code(
 
 
 def get_variant_by_codes(fabric_code: str, color_code: str) -> Optional[dict]:
-    """Get variant by fabric_code and color_code with full details."""
+    """Get variant by fabric_code and color_code (alias-aware) with full details."""
+    variant_id = resolve_variant_id(fabric_code, color_code)
+    if variant_id is None:
+        return None
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -425,9 +428,9 @@ def get_variant_by_codes(fabric_code: str, color_code: str) -> Optional[dict]:
                     v.gallery as variant_gallery
                 FROM fabric_variants v
                 JOIN fabrics f ON v.fabric_id = f.id
-                WHERE f.fabric_code = %s AND v.color_code = %s
+                WHERE v.id = %s
                 """,
-                (fabric_code, color_code)
+                (variant_id,)
             )
             return cur.fetchone()
 
@@ -505,81 +508,33 @@ def update_variant_by_codes(
     image_url: Optional[str] = None,
     gallery: Optional[dict] = None
 ) -> Optional[dict]:
-    """Update a variant by fabric_code + color_code. Returns None if not found."""
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            # Find variant
-            cur.execute(
-                """
-                SELECT v.id FROM fabric_variants v
-                JOIN fabrics f ON v.fabric_id = f.id
-                WHERE f.fabric_code = %s AND v.color_code = %s
-                """,
-                (fabric_code, color_code)
-            )
-            row = cur.fetchone()
-            if not row:
-                conn.rollback()
-                return None
+    """Update a variant by fabric_code + color_code (alias-aware). Returns None if not found."""
+    variant_id = resolve_variant_id(fabric_code, color_code)
+    if variant_id is None:
+        return None
 
-            variant_id = row["id"]
-
-            # Build dynamic update query
-            updates = []
-            params = {"id": variant_id}
-
-            if new_color_code is not None:
-                updates.append("color_code = %(new_color_code)s")
-                params["new_color_code"] = new_color_code
-
-            if gsm is not None:
-                updates.append("gsm = %(gsm)s")
-                params["gsm"] = gsm
-
-            if width is not None:
-                updates.append("width = %(width)s")
-                params["width"] = width
-
-            if finish is not None:
-                updates.append("finish = %(finish)s")
-                params["finish"] = finish
-
-            if image_url is not None:
-                updates.append("image_url = %(image_url)s")
-                params["image_url"] = image_url
-
-            if gallery is not None:
-                updates.append("gallery = %(gallery)s")
-                params["gallery"] = json.dumps(gallery)
-
-            if not updates:
-                # No updates provided, just return current variant detail
-                conn.rollback()
-                return get_variant_by_codes(fabric_code, color_code)
-
-            update_sql = f"UPDATE fabric_variants SET {', '.join(updates)} WHERE id = %(id)s RETURNING id, fabric_id, color_code, gsm, width, finish, image_url, gallery"
-            cur.execute(update_sql, params)
-            result = cur.fetchone()
-        conn.commit()
-        return result
+    return update_variant(
+        variant_id=variant_id,
+        color_code=new_color_code,
+        gsm=gsm,
+        width=width,
+        finish=finish,
+        image_url=image_url,
+        gallery=gallery,
+    )
 
 
 def delete_variant_by_codes(fabric_code: str, color_code: str) -> bool:
-    """Delete a variant by fabric_code + color_code. Returns True if deleted."""
+    """Delete a variant (alias-aware) — removes the underlying variant regardless of which code addresses it."""
+    variant_id = resolve_variant_id(fabric_code, color_code)
+    if variant_id is None:
+        return False
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                DELETE FROM fabric_variants v
-                USING fabrics f
-                WHERE v.fabric_id = f.id AND f.fabric_code = %s AND v.color_code = %s
-                RETURNING v.id
-                """,
-                (fabric_code, color_code)
-            )
-            result = cur.fetchone()
+            cur.execute("DELETE FROM fabric_variants WHERE id = %s", (variant_id,))
+            deleted = cur.rowcount > 0
         conn.commit()
-        return result is not None
+    return deleted
 
 
 def get_variant_detail(variant_id: int) -> Optional[dict]:
@@ -776,28 +731,12 @@ def create_movement_by_codes(
     reason: Optional[str] = None
 ) -> Optional[dict]:
     """
-    Create a movement using fabric_code + color_code.
+    Create a movement using fabric_code + color_code (alias-aware).
     Returns None if variant doesn't exist.
     """
-    # First lookup the variant
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT v.id FROM fabric_variants v
-                JOIN fabrics f ON v.fabric_id = f.id
-                WHERE f.fabric_code = %s AND v.color_code = %s
-                """,
-                (fabric_code, color_code)
-            )
-            row = cur.fetchone()
-            if not row:
-                conn.rollback()
-                return None
-            variant_id = row["id"]
-        conn.rollback()  # Clean up read-only transaction
-
-    # Use existing function
+    variant_id = resolve_variant_id(fabric_code, color_code)
+    if variant_id is None:
+        return None
     return create_movement(variant_id, movement_type, qty, uom, roll_count, document_id, reason)
 
 
@@ -1164,7 +1103,10 @@ def get_stock_balance(variant_id: int, uom: str = "m") -> Optional[dict]:
 
 
 def get_stock_balance_by_codes(fabric_code: str, color_code: str, uom: str = "m") -> Optional[dict]:
-    """Get stock balance using fabric_code + color_code."""
+    """Get stock balance using fabric_code + color_code (alias-aware)."""
+    variant_id = resolve_variant_id(fabric_code, color_code)
+    if variant_id is None:
+        return None
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -1188,9 +1130,9 @@ def get_stock_balance_by_codes(fabric_code: str, color_code: str, uom: str = "m"
                 FROM fabric_variants v
                 JOIN fabrics f ON v.fabric_id = f.id
                 LEFT JOIN stock_balances sb ON v.id = sb.variant_id
-                WHERE f.fabric_code = %s AND v.color_code = %s
+                WHERE v.id = %s
                 """,
-                (fabric_code, color_code)
+                (variant_id,)
             )
             result = cur.fetchone()
 
@@ -1442,17 +1384,9 @@ def create_movements_batch(
                 roll_count = item.get("roll_count")
 
                 try:
-                    # Look up variant
-                    cur.execute(
-                        """
-                        SELECT v.id FROM fabric_variants v
-                        JOIN fabrics f ON v.fabric_id = f.id
-                        WHERE f.fabric_code = %s AND v.color_code = %s
-                        """,
-                        (fabric_code, color_code)
-                    )
-                    row = cur.fetchone()
-                    if not row:
+                    # Look up variant (alias-aware, stays inside the batch's open transaction)
+                    variant_id = _resolve_variant_id_on_cursor(cur, fabric_code, color_code)
+                    if variant_id is None:
                         failed.append({
                             "fabric_code": fabric_code,
                             "color_code": color_code,
@@ -1460,8 +1394,6 @@ def create_movements_batch(
                             "error": f"Variant '{color_code}' not found for fabric '{fabric_code}'"
                         })
                         continue
-
-                    variant_id = row["id"]
 
                     # Get previous balance
                     cur.execute(
