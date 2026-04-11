@@ -85,6 +85,26 @@ def execute_reconcile(
                     )
 
                     if survivor_vid is None:
+                        # Check if any alias in the group resolves to an existing variant.
+                        # This handles the case where the sheet's primary (e.g. 910) is new
+                        # but one of its aliases (e.g. 1101) was previously a standalone primary.
+                        # In that case we promote the sheet's primary by renaming the existing
+                        # variant's color_code and registering the old primary as an alias.
+                        for code in group.alias_codes:
+                            alt_vid = repo._resolve_variant_id_on_cursor(cur, group.fabric_code, code)
+                            if alt_vid is not None:
+                                # Rename this variant's primary to the sheet's primary_color_code
+                                cur.execute(
+                                    "UPDATE fabric_variants SET color_code = %s WHERE id = %s",
+                                    (group.primary_color_code, alt_vid),
+                                )
+                                # Register the old primary as an alias so it still resolves
+                                repo._add_variant_alias_on_cursor(cur, fabric_id, alt_vid, code)
+                                summary.aliases_created += 1
+                                survivor_vid = alt_vid
+                                break
+
+                    if survivor_vid is None:
                         # Branch 1 — variant doesn't exist, create it
                         cur.execute(
                             """
