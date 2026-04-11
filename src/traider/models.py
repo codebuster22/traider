@@ -441,3 +441,45 @@ class QueryResponse(BaseModel):
     data: Optional[list[dict]] = None
     summary: Optional[QuerySummary] = None
     error: Optional[QueryErrorDetail] = None
+
+
+# ============================================================================
+# Variant Linking
+# ============================================================================
+
+class LinkVariantsRequest(BaseModel):
+    color_codes: list[str]
+    confirm: bool = False
+
+    @field_validator("color_codes")
+    @classmethod
+    def non_empty(cls, v):
+        if not v:
+            raise ValueError("color_codes must contain at least one code")
+        return v
+
+
+class LinkMergeSourcePlan(BaseModel):
+    color_code: str
+    on_hand_m: float
+    movement_count: int
+
+
+class LinkConfirmationPlan(BaseModel):
+    primary: str
+    merge_sources: list[LinkMergeSourcePlan]
+    result_on_hand_m: float
+
+
+class LinkVariantsResponse(BaseModel):
+    result: Literal["linked", "already_linked"]
+    primary: str
+    aliases_added: list[str] = Field(default_factory=list)
+    merged_from: list[str] = Field(default_factory=list)
+    final_on_hand_m: Optional[float] = None
+
+
+class LinkConfirmationRequired(BaseModel):
+    status: Literal["confirmation_required"] = "confirmation_required"
+    plan: LinkConfirmationPlan
+    message: str
