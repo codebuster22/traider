@@ -7,7 +7,8 @@ from fastapi.responses import JSONResponse
 from traider.models import (
     VariantCreate, VariantUpdate, Variant, VariantDetail, VariantSearchResult,
     VariantBatchRequest, VariantBatchResponse, VariantSearchBatchRequest, VariantSearchBatchResponse,
-    VariantSearchItem, MessageResponse
+    VariantSearchItem, MessageResponse,
+    LinkVariantsRequest, LinkVariantsResponse, LinkConfirmationRequired,
 )
 from traider import repo
 from traider.cloudinary_utils import upload_image as cloudinary_upload
@@ -252,6 +253,40 @@ def search_variants_batch(fabric_code: str, request: VariantSearchBatchRequest):
             "failed": 0
         }
     }
+
+
+# ============================================================================
+# Variant Linking - /fabrics/{fabric_code}/variants/link
+# ============================================================================
+
+@nested_router.post(
+    "/fabrics/{fabric_code}/variants/link",
+    responses={
+        200: {"model": LinkVariantsResponse},
+        404: {"description": "No matching variants"},
+        409: {"model": LinkConfirmationRequired, "description": "Confirmation required for destructive merge"},
+    },
+)
+def link_variants_route(fabric_code: str, request: LinkVariantsRequest):
+    """Link multiple color codes to the same fabric variant.
+
+    The first code in `color_codes` is the user-intended primary. See spec §6.3.
+    """
+    result = repo._execute_link(fabric_code, request.color_codes, confirm=request.confirm)
+    if result["result"] == "not_found":
+        raise HTTPException(
+            status_code=404,
+            detail=f"No matching variants in fabric '{fabric_code}' for any of the given codes",
+        )
+    if result["result"] == "confirmation_required":
+        # Translate internal `result` discriminator → public `status` (per spec §6.3 Pydantic shape)
+        public_body = {
+            "status": "confirmation_required",
+            "plan": result["plan"],
+            "message": result["message"],
+        }
+        return JSONResponse(status_code=409, content=public_body)
+    return result
 
 
 # ============================================================================
