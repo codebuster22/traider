@@ -290,6 +290,46 @@ def link_variants_route(fabric_code: str, request: LinkVariantsRequest):
 
 
 # ============================================================================
+# Variant Alias Routes - /fabrics/{fabric_code}/variants/{color_code}/aliases
+# ============================================================================
+
+@nested_router.get(
+    "/fabrics/{fabric_code}/variants/{color_code}/aliases",
+    response_model=list[str],
+)
+def get_variant_aliases_route(fabric_code: str, color_code: str):
+    """List all aliases for a variant."""
+    variant_id = repo.resolve_variant_id(fabric_code, color_code)
+    if variant_id is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Variant '{color_code}' not found in fabric '{fabric_code}'",
+        )
+    return repo.list_variant_aliases(variant_id)
+
+
+@nested_router.delete(
+    "/fabrics/{fabric_code}/variants/{color_code}/aliases/{alias}",
+    response_model=MessageResponse,
+)
+def delete_variant_alias_route(fabric_code: str, color_code: str, alias: str):
+    """Delete a specific alias from a variant."""
+    variant_id = repo.resolve_variant_id(fabric_code, color_code)
+    if variant_id is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Variant '{color_code}' not found in fabric '{fabric_code}'",
+        )
+    removed = repo.remove_variant_alias(variant_id, alias)
+    if not removed:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Alias '{alias}' not found on variant '{color_code}'",
+        )
+    return MessageResponse(message=f"Alias '{alias}' removed")
+
+
+# ============================================================================
 # Flat Routes (Fallback) - /variants
 # ============================================================================
 

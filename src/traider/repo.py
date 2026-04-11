@@ -1551,6 +1551,19 @@ def list_variant_aliases(variant_id: int) -> list[str]:
             return [row["alias"] for row in cur.fetchall()]
 
 
+def remove_variant_alias(variant_id: int, alias: str) -> bool:
+    """Remove an alias from a variant. Returns True if removed."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM variant_aliases WHERE variant_id = %s AND alias = %s RETURNING variant_id",
+                (variant_id, alias),
+            )
+            removed = cur.fetchone() is not None
+        conn.commit()
+    return removed
+
+
 def _execute_link_on_cursor(
     cur,
     fabric_id: int,
