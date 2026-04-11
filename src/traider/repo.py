@@ -57,22 +57,72 @@ def resolve_variant_id(fabric_code: str, code_or_alias: str) -> Optional[int]:
             return _resolve_variant_id_on_cursor(cur, fabric_code, code_or_alias)
 
 
+class AliasCollisionError(Exception):
+    """Raised when an alias would collide with an existing primary color_code or alias in the same fabric."""
+
+
+def _add_variant_alias_on_cursor(
+    cur,
+    fabric_id: int,
+    variant_id: int,
+    alias: str,
+) -> bool:
+    """Insert an alias row using the caller's cursor. Does not commit/rollback.
+
+    Returns True if inserted, False if (variant_id, alias) already present.
+    Raises AliasCollisionError if the alias collides with a primary color_code
+    or with an alias pointing at a different variant in the same fabric.
+
+    Callers are responsible for their own transaction management. The reconcile
+    writer and _execute_link_on_cursor use this to stay inside one transaction.
+    """
+    # Invariant 1: alias must not equal any primary color_code in this fabric
+    cur.execute(
+        "SELECT id FROM fabric_variants WHERE fabric_id = %s AND color_code = %s",
+        (fabric_id, alias),
+    )
+    row = cur.fetchone()
+    if row and row["id"] != variant_id:
+        raise AliasCollisionError(
+            f"Alias '{alias}' collides with primary color_code of variant {row['id']} in fabric_id={fabric_id}"
+        )
+
+    # Invariant 2: alias must not already belong to a DIFFERENT variant in this fabric
+    cur.execute(
+        "SELECT variant_id FROM variant_aliases WHERE fabric_id = %s AND alias = %s",
+        (fabric_id, alias),
+    )
+    row = cur.fetchone()
+    if row:
+        if row["variant_id"] == variant_id:
+            return False  # idempotent no-op
+        raise AliasCollisionError(
+            f"Alias '{alias}' already belongs to variant {row['variant_id']} in fabric_id={fabric_id}"
+        )
+
+    # Safe to insert
+    cur.execute(
+        "INSERT INTO variant_aliases (fabric_id, variant_id, alias) VALUES (%s, %s, %s)",
+        (fabric_id, variant_id, alias),
+    )
+    return True
+
+
 def add_variant_alias_direct(fabric_id: int, variant_id: int, alias: str) -> bool:
-    """Insert a row into variant_aliases. Minimal version — A.3 hardens with invariants."""
+    """Public wrapper: opens its own connection and commits on success.
+
+    Used by the link route's alias helpers and by test fixtures. The reconcile
+    writer and _execute_link call `_add_variant_alias_on_cursor` directly.
+    """
     with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO variant_aliases (fabric_id, variant_id, alias)
-                VALUES (%s, %s, %s)
-                ON CONFLICT DO NOTHING
-                RETURNING fabric_id
-                """,
-                (fabric_id, variant_id, alias),
-            )
-            row = cur.fetchone()
-        conn.commit()
-    return row is not None
+        try:
+            with conn.cursor() as cur:
+                inserted = _add_variant_alias_on_cursor(cur, fabric_id, variant_id, alias)
+            conn.commit()
+            return inserted
+        except Exception:
+            conn.rollback()
+            raise
 
 
 # ============================================================================
