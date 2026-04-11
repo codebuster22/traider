@@ -1534,3 +1534,276 @@ def search_variants_batch(
         })
 
     return (fabric["id"], found, not_found)
+
+
+# ============================================================================
+# Variant alias listing and link algorithm
+# ============================================================================
+
+def list_variant_aliases(variant_id: int) -> list[str]:
+    """Return all aliases for a variant, sorted."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT alias FROM variant_aliases WHERE variant_id = %s ORDER BY alias",
+                (variant_id,),
+            )
+            return [row["alias"] for row in cur.fetchall()]
+
+
+def _execute_link_on_cursor(
+    cur,
+    fabric_id: int,
+    fabric_code: str,
+    color_codes: list[str],
+    confirm: bool = False,
+) -> dict:
+    """Execute the link algorithm against an open cursor. See spec §6.3.
+
+    Does NOT open a connection, does NOT commit, does NOT rollback. Callers
+    own transaction management. Returns one of:
+      - {"result": "not_found"}
+      - {"result": "linked", "primary": ..., "aliases_added": [...],
+         "merged_from": [...], "final_on_hand_m": ...}
+      - {"result": "already_linked", "primary": ...}
+      - {"result": "confirmation_required", "plan": {...}, "message": ...}
+
+    Note: when returning confirmation_required, the caller should roll back
+    (no writes have happened before that point, but the SET TRANSACTION that
+    may have been issued needs cleaning up).
+    """
+    if not color_codes:
+        return {"result": "not_found"}
+
+    # Step 1: resolve each code to a variant_id (or None). Use the cursor-aware
+    # resolver so we see the caller's pending writes.
+    resolved = [
+        (c, _resolve_variant_id_on_cursor(cur, fabric_code, c))
+        for c in color_codes
+    ]
+    distinct_vids = list({vid for _, vid in resolved if vid is not None})
+
+    if not distinct_vids:
+        return {"result": "not_found"}
+
+    # Step 3: determine survivor
+    primary_code = color_codes[0]
+    primary_vid = resolved[0][1]
+    needs_promote_swap = False
+    needs_rename = False
+    old_primary_to_demote: Optional[str] = None
+    survivor_id: int
+
+    if primary_vid is not None:
+        survivor_id = primary_vid
+        cur.execute(
+            "SELECT color_code FROM fabric_variants WHERE id = %s",
+            (survivor_id,),
+        )
+        current_primary = cur.fetchone()["color_code"]
+        if current_primary != primary_code:
+            needs_promote_swap = True
+            old_primary_to_demote = current_primary
+    else:
+        first_resolving = next(vid for _, vid in resolved if vid is not None)
+        survivor_id = first_resolving
+        needs_rename = True
+        cur.execute(
+            "SELECT color_code FROM fabric_variants WHERE id = %s",
+            (survivor_id,),
+        )
+        old_primary_to_demote = cur.fetchone()["color_code"]
+
+    # Step 4: merge sources
+    merge_source_ids = [vid for vid in distinct_vids if vid != survivor_id]
+
+    # Step 5: stock check for confirmation
+    sources_with_stock = []
+    for src_id in merge_source_ids:
+        cur.execute(
+            """
+            SELECT
+                COALESCE(sb.on_hand_m, 0) AS on_hand_m,
+                (SELECT COUNT(*) FROM stock_movements sm
+                  WHERE sm.variant_id = v.id AND sm.is_cancelled = false) AS movement_count,
+                v.color_code
+              FROM fabric_variants v
+              LEFT JOIN stock_balances sb ON sb.variant_id = v.id
+             WHERE v.id = %s
+            """,
+            (src_id,),
+        )
+        row = cur.fetchone()
+        if row and (float(row["on_hand_m"] or 0) > 0 or row["movement_count"] > 0):
+            sources_with_stock.append({
+                "color_code": row["color_code"],
+                "on_hand_m": float(row["on_hand_m"] or 0),
+                "movement_count": int(row["movement_count"]),
+            })
+
+    if sources_with_stock and not confirm:
+        cur.execute(
+            "SELECT COALESCE(on_hand_m, 0) AS on_hand_m FROM stock_balances WHERE variant_id = %s",
+            (survivor_id,),
+        )
+        row = cur.fetchone()
+        survivor_balance = float(row["on_hand_m"] or 0) if row else 0.0
+        result_total = survivor_balance + sum(s["on_hand_m"] for s in sources_with_stock)
+        # Do NOT rollback here — the caller owns transaction management.
+        return {
+            "result": "confirmation_required",
+            "plan": {
+                "primary": primary_code,
+                "merge_sources": sources_with_stock,
+                "result_on_hand_m": result_total,
+            },
+            "message": (
+                f"Linking will merge {len(sources_with_stock)} variant(s) with existing stock. "
+                "This cannot be undone. Resend with confirm=true to proceed."
+            ),
+        }
+
+    # Step 3 continued: apply promote-swap or rename (uses _add_variant_alias_on_cursor)
+    if needs_promote_swap:
+        cur.execute(
+            "DELETE FROM variant_aliases WHERE fabric_id = %s AND alias = %s",
+            (fabric_id, primary_code),
+        )
+        cur.execute(
+            "UPDATE fabric_variants SET color_code = %s WHERE id = %s",
+            (primary_code, survivor_id),
+        )
+        _add_variant_alias_on_cursor(cur, fabric_id, survivor_id, old_primary_to_demote)
+    elif needs_rename:
+        cur.execute(
+            "UPDATE fabric_variants SET color_code = %s WHERE id = %s",
+            (primary_code, survivor_id),
+        )
+        _add_variant_alias_on_cursor(cur, fabric_id, survivor_id, old_primary_to_demote)
+
+    # Step 6: merge each source into survivor
+    merged_from = []
+    for src_id in merge_source_ids:
+        cur.execute(
+            "SELECT color_code FROM fabric_variants WHERE id = %s",
+            (src_id,),
+        )
+        src_row = cur.fetchone()
+        if src_row is None:
+            continue
+        src_primary = src_row["color_code"]
+        merged_from.append(src_primary)
+
+        cur.execute(
+            "UPDATE stock_movements SET variant_id = %s WHERE variant_id = %s",
+            (survivor_id, src_id),
+        )
+        cur.execute(
+            """
+            INSERT INTO variant_aliases (fabric_id, variant_id, alias)
+            SELECT fabric_id, %s, alias FROM variant_aliases WHERE variant_id = %s
+            ON CONFLICT DO NOTHING
+            """,
+            (survivor_id, src_id),
+        )
+        cur.execute("DELETE FROM variant_aliases WHERE variant_id = %s", (src_id,))
+        cur.execute(
+            """
+            INSERT INTO variant_aliases (fabric_id, variant_id, alias)
+            VALUES (%s, %s, %s)
+            ON CONFLICT DO NOTHING
+            """,
+            (fabric_id, survivor_id, src_primary),
+        )
+        cur.execute("DELETE FROM stock_balances WHERE variant_id = %s", (src_id,))
+        cur.execute("DELETE FROM fabric_variants WHERE id = %s", (src_id,))
+
+    # Step 7: add unresolved codes as aliases
+    aliases_added = []
+    unresolved_inputs = [
+        c for c, vid in resolved
+        if vid is None and c != primary_code
+    ]
+    for c in unresolved_inputs:
+        added = _add_variant_alias_on_cursor(cur, fabric_id, survivor_id, c)
+        if added:
+            aliases_added.append(c)
+
+    # Step 8: recompute survivor balance
+    cur.execute(
+        """
+        INSERT INTO stock_balances (variant_id, on_hand_m, on_hand_rolls, updated_at)
+        VALUES (%s, 0, 0, now())
+        ON CONFLICT (variant_id) DO NOTHING
+        """,
+        (survivor_id,),
+    )
+    cur.execute(
+        """
+        UPDATE stock_balances sb
+           SET on_hand_m = COALESCE((
+                 SELECT SUM(delta_qty_m) FROM stock_movements
+                  WHERE variant_id = sb.variant_id AND is_cancelled = false
+               ), 0),
+               on_hand_rolls = COALESCE((
+                 SELECT SUM(COALESCE(roll_count, 0)) FROM stock_movements
+                  WHERE variant_id = sb.variant_id AND is_cancelled = false
+               ), 0),
+               updated_at = now()
+         WHERE variant_id = %s
+        """,
+        (survivor_id,),
+    )
+    cur.execute(
+        "SELECT on_hand_m FROM stock_balances WHERE variant_id = %s",
+        (survivor_id,),
+    )
+    final_row = cur.fetchone()
+    final_on_hand = float(final_row["on_hand_m"]) if final_row else 0.0
+
+    if not aliases_added and not merged_from and not needs_promote_swap and not needs_rename:
+        return {"result": "already_linked", "primary": primary_code}
+
+    return {
+        "result": "linked",
+        "primary": primary_code,
+        "aliases_added": aliases_added,
+        "merged_from": merged_from,
+        "final_on_hand_m": final_on_hand,
+    }
+
+
+def _execute_link(
+    fabric_code: str,
+    color_codes: list[str],
+    confirm: bool = False,
+) -> dict:
+    """Public wrapper: opens its own SERIALIZABLE transaction and calls the inner helper.
+
+    Used by the REST route (Task C.3). The reconcile writer (Task H.1) calls
+    _execute_link_on_cursor directly from inside its own transaction.
+    """
+    if not color_codes:
+        return {"result": "not_found"}
+
+    with get_conn() as conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+                cur.execute("SELECT id FROM fabrics WHERE fabric_code = %s", (fabric_code,))
+                fabric_row = cur.fetchone()
+                if fabric_row is None:
+                    conn.rollback()
+                    return {"result": "not_found"}
+                fabric_id = fabric_row["id"]
+                result = _execute_link_on_cursor(
+                    cur, fabric_id, fabric_code, color_codes, confirm
+                )
+            if result["result"] == "confirmation_required":
+                conn.rollback()
+            else:
+                conn.commit()
+            return result
+        except Exception:
+            conn.rollback()
+            raise
