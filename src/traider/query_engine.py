@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
 QUERY_TIMEOUT_SECONDS = 5
 MAX_RESULTS = 1000
 
